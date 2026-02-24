@@ -1,49 +1,459 @@
+-- init.lua — Entry point: setup(), open(), close(), refresh(), git operations
+--
+-- Single-instance: only one viewer tab open at a time.
+-- All git work is async (vim.system → on_exit → vim.schedule).
+
 local M = {}
 
+local config = require("git-diff-viewer.config")
+local state = require("git-diff-viewer.state")
+local git = require("git-diff-viewer.git")
+local parse = require("git-diff-viewer.parse")
+local utils = require("git-diff-viewer.utils")
+local layout = require("git-diff-viewer.ui.layout")
+local panel = require("git-diff-viewer.ui.panel")
+local diff = require("git-diff-viewer.ui.diff")
+
+-- ─── Setup ────────────────────────────────────────────────────────────────────
+
 function M.setup(opts)
-  M.opts = opts or {}
+  config.setup(opts)
 end
 
--- Open the diff viewer
+-- ─── Internal: load git data and render ───────────────────────────────────────
+
+-- Fetch git status + numstat in parallel, then render the panel.
+-- Called on open and on refresh.
+function M.load_and_render()
+  local cwd = state.git_root
+
+  local status_raw = nil
+  local unstaged_raw = nil
+  local staged_raw = nil
+  local pending = 3
+
+  local function try_render()
+    pending = pending - 1
+    if pending > 0 then return end
+
+    -- Parse everything on the main thread (inside vim.schedule)
+    local entries = parse.parse_status(status_raw or "")
+    local unstaged_numstat = parse.parse_numstat(unstaged_raw or "")
+    local staged_numstat = parse.parse_numstat(staged_raw or "")
+
+    state.files = parse.build_file_list(entries, unstaged_numstat, staged_numstat)
+    panel.render()
+  end
+
+  git.status(cwd, function(_, raw)
+    vim.schedule(function()
+      status_raw = raw
+      try_render()
+    end)
+  end)
+
+  git.diff_numstat(cwd, function(_, raw)
+    vim.schedule(function()
+      unstaged_raw = raw
+      try_render()
+    end)
+  end)
+
+  git.diff_cached_numstat(cwd, function(_, raw)
+    vim.schedule(function()
+      staged_raw = raw
+      try_render()
+    end)
+  end)
+end
+
+-- ─── Open ─────────────────────────────────────────────────────────────────────
+
 function M.open()
-  -- Create a buffer for the file panel
-  local panel_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(panel_buf, 0, -1, false, {
-    "  Git Diff Viewer",
-    "  ──────────────────",
-    "",
-    "  Plugin is working!",
-    "",
-    "  TODO: Show changed files here",
-  })
-  vim.api.nvim_set_option_value("modifiable", false, { buf = panel_buf })
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = panel_buf })
+  -- Single-instance: focus existing tab if it is still open
+  if layout.focus() then return end
 
-  -- Open in a new tab with a left panel split
-  vim.cmd("tabnew")
-  local main_win = vim.api.nvim_get_current_win()
+  -- Detect git repo from the current working directory
+  local cwd = vim.fn.getcwd()
 
-  -- Left panel
-  vim.cmd("topleft vsplit")
-  local panel_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(panel_win, panel_buf)
-  vim.api.nvim_win_set_width(panel_win, 40)
+  git.is_git_repo(cwd, function(is_repo)
+    vim.schedule(function()
+      if not is_repo then
+        utils.error("Not inside a git repository")
+        return
+      end
 
-  -- Focus the main area
-  vim.api.nvim_set_current_win(main_win)
+      git.get_root(cwd, function(ok, root)
+        vim.schedule(function()
+          if not ok then
+            utils.error("Could not determine git root")
+            return
+          end
 
-  -- Close with q
-  vim.keymap.set("n", "q", function()
-    vim.cmd("tabclose")
-  end, { buffer = panel_buf, desc = "Close diff viewer" })
+          state.reset()
+          state.git_root = root
+
+          -- Check whether the repo has any commits
+          git.has_commits(root, function(has)
+            vim.schedule(function()
+              state.has_commits = has
+
+              -- Build UI
+              layout.create_tab()
+              local buf = panel.create_buf()
+              layout.set_panel_buf(buf)
+
+              -- Focus the panel
+              if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+                vim.api.nvim_set_current_win(state.panel_win)
+              end
+
+              -- Close viewer if the tab is closed externally
+              vim.api.nvim_create_autocmd("TabClosed", {
+                callback = function()
+                  -- Reset state when our tab is closed
+                  state.reset()
+                end,
+                once = true,
+              })
+
+              -- Load git data and render panel
+              M.load_and_render()
+            end)
+          end)
+        end)
+      end)
+    end)
+  end)
 end
 
--- Close the diff viewer
+-- ─── Close ────────────────────────────────────────────────────────────────────
+
 function M.close()
-  vim.cmd("tabclose")
+  layout.close()
+  state.reset()
 end
 
--- Register commands
+-- ─── Refresh ──────────────────────────────────────────────────────────────────
+
+function M.refresh()
+  if not state.git_root then return end
+  -- Clear buf cache so git show buffers are re-fetched
+  state.buf_cache = {}
+  M.load_and_render()
+end
+
+-- ─── Tab/S-Tab file cycling ───────────────────────────────────────────────────
+
+-- Collect all file items across all sections in display order.
+local function all_file_items()
+  local items = {}
+  for _, line in ipairs(state.panel_lines) do
+    if line.type == "file" then
+      table.insert(items, { item = line.item })
+    end
+  end
+  return items
+end
+
+function M.next_file()
+  local items = all_file_items()
+  if #items == 0 then return end
+
+  local current = state.current_diff
+  if not current then
+    diff.open(items[1].item)
+    return
+  end
+
+  for i, entry in ipairs(items) do
+    if entry.item.path == current.item.path and entry.item.section == current.item.section then
+      local next_entry = items[i + 1] or items[1]
+      diff.open(next_entry.item)
+      return
+    end
+  end
+end
+
+function M.prev_file()
+  local items = all_file_items()
+  if #items == 0 then return end
+
+  local current = state.current_diff
+  if not current then
+    diff.open(items[#items].item)
+    return
+  end
+
+  for i, entry in ipairs(items) do
+    if entry.item.path == current.item.path and entry.item.section == current.item.section then
+      local prev_entry = items[i - 1] or items[#items]
+      diff.open(prev_entry.item)
+      return
+    end
+  end
+end
+
+-- ─── Git operations with optimistic UI ───────────────────────────────────────
+
+-- Optimistic UI helper: immediately re-render, then run git command.
+-- On failure: show error and re-render from fresh git data.
+local function optimistic(action_fn, git_fn)
+  -- Capture pre-action state for rollback
+  local old_files = vim.deepcopy(state.files)
+
+  -- Apply optimistic change to state
+  action_fn()
+  panel.render()
+
+  -- Run the actual git command
+  git_fn(function(ok, stderr)
+    vim.schedule(function()
+      if not ok then
+        -- Roll back
+        state.files = old_files
+        panel.render()
+        utils.error("Git operation failed: " .. (stderr or ""))
+      end
+      -- On success we don't re-render — the optimistic state is correct.
+      -- Auto-refresh (via .git/index watcher) will sync eventually.
+    end)
+  end)
+end
+
+-- Remove an item from all sections of state.files in place.
+local function remove_item(path, section)
+  for _, sec in pairs(state.files) do
+    for i = #sec, 1, -1 do
+      if sec[i].path == path and (section == nil or sec[i].section == section) then
+        table.remove(sec, i)
+      end
+    end
+  end
+end
+
+-- Move an item from one section to another in state.files.
+local function move_item(path, from_section, to_section)
+  local item = nil
+  local from_list = state.files[from_section]
+  for i = #from_list, 1, -1 do
+    if from_list[i].path == path then
+      item = table.remove(from_list, i)
+      break
+    end
+  end
+  if item then
+    item.section = to_section
+    table.insert(state.files[to_section], item)
+  end
+end
+
+-- stage_item: called with the panel_line under the cursor
+function M.stage_item(line)
+  if line.type == "file" then
+    local item = line.item
+
+    -- Determine paths to stage
+    local paths = { item.path }
+
+    if item.section == "changes" or item.status == "untracked" then
+      -- Stage the file (moves from Changes to Staged; untracked → staged new).
+      -- After git add, all changes become staged (no more unstaged changes), so
+      -- status becomes "staged" regardless of whether it was "unstaged" or "both".
+      optimistic(function()
+        remove_item(item.path, "changes")
+        local new_item = vim.tbl_extend("force", item, { section = "staged", status = "staged" })
+        table.insert(state.files.staged, new_item)
+      end, function(cb)
+        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
+
+    elseif item.section == "conflicts" then
+      -- Stage conflict (marks as resolved)
+      optimistic(function()
+        remove_item(item.path, "conflicts")
+        local new_item = vim.tbl_extend("force", item, { section = "staged", status = "staged" })
+        table.insert(state.files.staged, new_item)
+      end, function(cb)
+        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
+
+    else
+      -- No-op for items already staged or in staged section
+    end
+
+  elseif line.type == "folder" then
+    -- Collect all files in this folder that are stageable
+    local paths = {}
+    for _, item in ipairs(state.files.changes) do
+      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+        table.insert(paths, item.path)
+      end
+    end
+    for _, item in ipairs(state.files.conflicts) do
+      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+        table.insert(paths, item.path)
+      end
+    end
+    if #paths == 0 then return end
+
+    optimistic(function()
+      for _, p in ipairs(paths) do
+        remove_item(p, nil)
+      end
+    end, function(cb)
+      git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+    end)
+  end
+end
+
+function M.unstage_item(line)
+  if line.type == "file" then
+    local item = line.item
+    if item.section ~= "staged" then return end
+
+    local paths = { item.path }
+
+    optimistic(function()
+      remove_item(item.path, "staged")
+      -- After git restore --staged, the staged changes are removed.
+      -- If the file was "both" (MM), it still has unstaged changes → status stays "both".
+      -- If it was "staged" only (M_), it now has only unstaged changes → status = "unstaged".
+      local new_status = item.status == "both" and "both" or "unstaged"
+      local new_item = vim.tbl_extend("force", item, { section = "changes", status = new_status })
+      table.insert(state.files.changes, new_item)
+    end, function(cb)
+      git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+    end)
+
+  elseif line.type == "folder" then
+    local paths = {}
+    for _, item in ipairs(state.files.staged) do
+      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+        table.insert(paths, item.path)
+      end
+    end
+    if #paths == 0 then return end
+
+    optimistic(function()
+      for _, p in ipairs(paths) do
+        remove_item(p, "staged")
+      end
+    end, function(cb)
+      git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+    end)
+  end
+end
+
+function M.discard_item(line)
+  if line.type == "file" then
+    local item = line.item
+    local xy = item.xy
+
+    if xy == "??" then
+      -- Untracked: delete from disk with confirmation
+      vim.ui.select({ "Yes", "No" }, {
+        prompt = "Delete untracked file '" .. item.path .. "'?",
+      }, function(choice)
+        if choice ~= "Yes" then return end
+        optimistic(function()
+          remove_item(item.path, "changes")
+        end, function(cb)
+          local ok = os.remove(state.git_root .. "/" .. item.path)
+          cb(ok ~= nil, ok == nil and "Failed to delete file" or nil)
+        end)
+      end)
+      return
+    end
+
+    if item.section == "staged" then
+      -- Staged modified: unstage then restore working tree
+      local paths = { item.path }
+      optimistic(function()
+        remove_item(item.path, "staged")
+      end, function(cb)
+        git.unstage(state.git_root, paths, function(ok, stderr)
+          if not ok then cb(ok, stderr); return end
+          git.discard(state.git_root, paths, function(ok2, stderr2)
+            cb(ok2, stderr2)
+          end)
+        end)
+      end)
+      return
+    end
+
+    -- Unstaged: restore working tree
+    if item.section == "changes" then
+      local paths = { item.path }
+      optimistic(function()
+        remove_item(item.path, "changes")
+      end, function(cb)
+        git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
+    end
+
+  elseif line.type == "folder" then
+    local paths = {}
+    for _, item in ipairs(state.files.changes) do
+      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+        if item.xy ~= "??" then -- skip untracked (can't batch-delete)
+          table.insert(paths, item.path)
+        end
+      end
+    end
+    if #paths == 0 then return end
+
+    optimistic(function()
+      for _, p in ipairs(paths) do
+        remove_item(p, "changes")
+      end
+    end, function(cb)
+      git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+    end)
+  end
+end
+
+function M.stage_all()
+  optimistic(function()
+    -- Move all changes/untracked to staged.
+    -- After git add -A, all changes are in the staging area (status = "staged").
+    -- Existing staged items remain as-is.
+    local new_staged = {}
+    for _, item in ipairs(state.files.changes) do
+      table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+    end
+    for _, item in ipairs(state.files.staged) do
+      table.insert(new_staged, item)
+    end
+    state.files.changes = {}
+    state.files.staged = new_staged
+  end, function(cb)
+    git.stage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+  end)
+end
+
+function M.unstage_all()
+  optimistic(function()
+    -- Move all staged items back to changes.
+    -- After git restore --staged ., all staged changes are removed (status = "unstaged").
+    -- "both" items that were in staged are now "both" still but live in changes section.
+    local new_changes = {}
+    for _, item in ipairs(state.files.staged) do
+      local new_status = item.status == "both" and "both" or "unstaged"
+      table.insert(new_changes, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+    end
+    for _, item in ipairs(state.files.changes) do
+      table.insert(new_changes, item)
+    end
+    state.files.staged = {}
+    state.files.changes = new_changes
+  end, function(cb)
+    git.unstage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+  end)
+end
+
+-- ─── Commands ─────────────────────────────────────────────────────────────────
+
 vim.api.nvim_create_user_command("GitDiffViewer", function()
   M.open()
 end, { desc = "Open Git Diff Viewer" })
