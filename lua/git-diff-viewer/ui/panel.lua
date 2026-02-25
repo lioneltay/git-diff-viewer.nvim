@@ -411,31 +411,31 @@ function M.create_buf()
   map(km.stage, function()
     local line = current_line()
     if not line then return end
-    require("git-diff-viewer").stage_item(line)
+    require("git-diff-viewer.operations").stage_item(line)
   end, "Stage file/folder")
 
   -- Unstage
   map(km.unstage, function()
     local line = current_line()
     if not line then return end
-    require("git-diff-viewer").unstage_item(line)
+    require("git-diff-viewer.operations").unstage_item(line)
   end, "Unstage file/folder")
 
   -- Discard
   map(km.discard, function()
     local line = current_line()
     if not line then return end
-    require("git-diff-viewer").discard_item(line)
+    require("git-diff-viewer.operations").discard_item(line)
   end, "Discard file/folder")
 
   -- Stage all
   map(km.stage_all, function()
-    require("git-diff-viewer").stage_all()
+    require("git-diff-viewer.operations").stage_all()
   end, "Stage all")
 
   -- Unstage all
   map(km.unstage_all, function()
-    require("git-diff-viewer").unstage_all()
+    require("git-diff-viewer.operations").unstage_all()
   end, "Unstage all")
 
   -- Tab/S-Tab: cycle to next/previous file
