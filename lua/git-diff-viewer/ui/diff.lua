@@ -31,12 +31,22 @@ local function get_or_create_scratch(cache_key, path)
     return state.buf_cache[cache_key]
   end
 
+  -- Orphan detection: buffer may exist from a previous cache clear but still be valid.
+  -- Find it by name and reuse to preserve jumplist entries.
+  local expected_name = "git-diff-viewer://" .. cache_key
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b) == expected_name then
+      state.buf_cache[cache_key] = b
+      return b
+    end
+  end
+
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  -- "hide" so cached buffers survive when the window is closed (enables buf_cache reuse)
+  -- "hide" so cached buffers survive when the window is closed (enables jumplist + cache reuse)
   vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   -- Name gives the buffer a meaningful identity (and preserves extension for icons)
-  vim.api.nvim_buf_set_name(buf, "git-diff-viewer://" .. cache_key)
+  vim.api.nvim_buf_set_name(buf, expected_name)
   -- Set filetype from extension — more reliable than `filetype detect` on scratch buffers
   local ft = utils.path_to_ft(path)
   if ft ~= "" then
