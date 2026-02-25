@@ -189,6 +189,7 @@ local function setup_autocmds()
       if not state.is_active() then
         -- Our tab was the one closed
         teardown_autocmds()
+        teardown_watchers()
         state.reset()
       end
     end,
@@ -224,6 +225,69 @@ teardown_autocmds = function()
     refresh_timer:stop()
     refresh_timer = nil
   end
+end
+
+-- ─── File watching ────────────────────────────────────────────────────────
+
+-- Schedule a debounced refresh from a file watcher callback.
+-- Uses vim.schedule since watcher callbacks fire on the libuv thread.
+local function watcher_refresh()
+  vim.schedule(function()
+    if state.is_active() then
+      debounced_refresh()
+    end
+  end)
+end
+
+-- Start file watchers for .git/index and .git/HEAD.
+-- These detect external changes (staging from CLI, other tools, etc.)
+local function setup_watchers()
+  teardown_watchers()
+  local root = state.git_root
+  if not root then return end
+
+  local git_dir = root .. "/.git"
+
+  -- Watch .git/index — changes when files are staged/unstaged externally
+  local index_watcher = vim.uv.new_fs_event()
+  if index_watcher then
+    local ok = pcall(function()
+      index_watcher:start(git_dir .. "/index", {}, function(err)
+        if not err then watcher_refresh() end
+      end)
+    end)
+    if ok then
+      table.insert(state.watchers, index_watcher)
+    else
+      index_watcher:close()
+    end
+  end
+
+  -- Watch .git/HEAD — changes on branch switch, commit, etc.
+  local head_watcher = vim.uv.new_fs_event()
+  if head_watcher then
+    local ok = pcall(function()
+      head_watcher:start(git_dir .. "/HEAD", {}, function(err)
+        if not err then watcher_refresh() end
+      end)
+    end)
+    if ok then
+      table.insert(state.watchers, head_watcher)
+    else
+      head_watcher:close()
+    end
+  end
+end
+
+-- Stop and clean up all file watchers.
+local function teardown_watchers()
+  for _, w in ipairs(state.watchers) do
+    if not w:is_closing() then
+      w:stop()
+      w:close()
+    end
+  end
+  state.watchers = {}
 end
 
 -- ─── Open ─────────────────────────────────────────────────────────────────────
@@ -262,8 +326,9 @@ function M.open()
             vim.api.nvim_set_current_win(state.panel_win)
           end
 
-          -- Register autocmds (augroup ensures old ones are cleared first)
+          -- Register autocmds and file watchers
           setup_autocmds()
+          setup_watchers()
 
           -- Load git data and render panel
           M.load_and_render()
@@ -277,6 +342,7 @@ end
 
 function M.close()
   teardown_autocmds()
+  teardown_watchers()
   diff.cleanup_all_keymaps()
   layout.close()
   state.reset()
