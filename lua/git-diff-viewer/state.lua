@@ -5,6 +5,18 @@
 
 local M = {}
 
+-- Generation counter for async callback staleness detection.
+-- Monotonically increasing; never resets to 0.
+-- Each load_and_render call gets a generation number; if state.generation
+-- has moved on by the time the callback fires, the callback is stale.
+M.generation = 0
+
+--- Increment and return the next generation number.
+function M.next_generation()
+  M.generation = M.generation + 1
+  return M.generation
+end
+
 -- Reset to empty/initial state.
 function M.reset()
   -- Git root directory for the current session
@@ -50,6 +62,15 @@ function M.reset()
 
   -- Namespace for panel highlights
   M.ns = vim.api.nvim_create_namespace("git_diff_viewer_panel")
+end
+
+--- Return true if the viewer is currently active (tab exists and is valid).
+function M.is_active()
+  if not M.tab then return false end
+  for _, t in ipairs(vim.api.nvim_list_tabpages()) do
+    if t == M.tab then return true end
+  end
+  return false
 end
 
 -- Initialize on module load

@@ -14,6 +14,9 @@ local layout = require("git-diff-viewer.ui.layout")
 local panel = require("git-diff-viewer.ui.panel")
 local diff = require("git-diff-viewer.ui.diff")
 
+-- Augroup for all plugin autocmds — ensures clean teardown on close/reopen
+local augroup = vim.api.nvim_create_augroup("GitDiffViewer", { clear = true })
+
 -- ─── Setup ────────────────────────────────────────────────────────────────────
 
 function M.setup(opts)
@@ -25,17 +28,32 @@ end
 
 -- Fetch git status + numstat in parallel, then render the panel.
 -- Called on open and on refresh.
+-- Uses generation counter to discard stale callbacks.
 function M.load_and_render()
   local cwd = state.git_root
+  local gen = state.next_generation()
 
   local status_raw = nil
   local unstaged_raw = nil
   local staged_raw = nil
+  local errors = {}
   local pending = 3
 
   local function try_render()
     pending = pending - 1
     if pending > 0 then return end
+
+    -- Stale callback — a newer load_and_render was started
+    if state.generation ~= gen then return end
+
+    -- If any git command failed, show error and bail
+    if #errors > 0 then
+      utils.error("Git error: " .. table.concat(errors, "; "))
+      return
+    end
+
+    -- Viewer closed while we were loading
+    if not state.is_active() then return end
 
     -- Parse everything on the main thread (inside vim.schedule)
     local entries = parse.parse_status(status_raw or "")
@@ -46,26 +64,108 @@ function M.load_and_render()
     panel.render()
   end
 
-  git.status(cwd, function(_, raw)
+  git.status(cwd, function(ok, raw)
     vim.schedule(function()
-      status_raw = raw
+      if not ok then
+        table.insert(errors, "status: " .. (raw or "unknown"))
+      else
+        status_raw = raw
+      end
       try_render()
     end)
   end)
 
-  git.diff_numstat(cwd, function(_, raw)
+  git.diff_numstat(cwd, function(ok, raw)
     vim.schedule(function()
-      unstaged_raw = raw
+      if not ok then
+        table.insert(errors, "diff numstat: " .. (raw or "unknown"))
+      else
+        unstaged_raw = raw
+      end
       try_render()
     end)
   end)
 
-  git.diff_cached_numstat(cwd, function(_, raw)
+  git.diff_cached_numstat(cwd, function(ok, raw)
     vim.schedule(function()
-      staged_raw = raw
+      if not ok then
+        table.insert(errors, "diff cached numstat: " .. (raw or "unknown"))
+      else
+        staged_raw = raw
+      end
       try_render()
     end)
   end)
+end
+
+-- ─── Autocmd lifecycle ──────────────────────────────────────────────────────
+
+-- Forward declaration
+local teardown_autocmds
+
+-- Debounced refresh timer — shared across autocmds
+local refresh_timer = nil
+
+local function debounced_refresh()
+  if not state.is_active() then return end
+  if refresh_timer then
+    refresh_timer:stop()
+  end
+  refresh_timer = vim.defer_fn(function()
+    refresh_timer = nil
+    if state.is_active() then
+      M.load_and_render()
+    end
+  end, 200)
+end
+
+-- Register all plugin autocmds under the "GitDiffViewer" augroup.
+-- Called once during open(), after tab/panel are created.
+local function setup_autocmds()
+  -- Clean up state when the viewer tab is closed externally.
+  -- TabClosed fires for ANY tab, so we check whether ours still exists.
+  vim.api.nvim_create_autocmd("TabClosed", {
+    group = augroup,
+    callback = function()
+      if not state.tab then return end
+      if not state.is_active() then
+        -- Our tab was the one closed
+        teardown_autocmds()
+        state.reset()
+      end
+    end,
+  })
+
+  -- Auto-refresh when files are saved
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = augroup,
+    callback = function(ev)
+      if not state.is_active() then return end
+      -- Only refresh for files within the git root
+      local file = ev.file or ""
+      if file ~= "" and state.git_root and vim.startswith(file, state.git_root) then
+        debounced_refresh()
+      end
+    end,
+  })
+
+  -- Auto-refresh when Neovim regains focus
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = augroup,
+    callback = function()
+      if not state.is_active() then return end
+      debounced_refresh()
+    end,
+  })
+end
+
+-- Remove all plugin autocmds. Called on close() and when tab is closed externally.
+teardown_autocmds = function()
+  vim.api.nvim_clear_autocmds({ group = augroup })
+  if refresh_timer then
+    refresh_timer:stop()
+    refresh_timer = nil
+  end
 end
 
 -- ─── Open ─────────────────────────────────────────────────────────────────────
@@ -109,53 +209,8 @@ function M.open()
                 vim.api.nvim_set_current_win(state.panel_win)
               end
 
-              -- Clean up state when the viewer tab is closed externally.
-              -- TabClosed fires for ANY tab, so we check whether ours still exists.
-              vim.api.nvim_create_autocmd("TabClosed", {
-                callback = function()
-                  if not state.tab then return true end -- already cleaned up, remove autocmd
-                  -- Check if our tab is still in the tabpage list
-                  for _, t in ipairs(vim.api.nvim_list_tabpages()) do
-                    if t == state.tab then return end -- viewer tab still alive, ignore
-                  end
-                  -- Our tab was the one closed
-                  state.reset()
-                  return true -- remove the autocmd
-                end,
-              })
-
-              -- Auto-refresh when files are saved or Neovim regains focus
-              local refresh_timer = nil
-              local function debounced_refresh()
-                if not state.git_root then return end
-                if refresh_timer then
-                  refresh_timer:stop()
-                end
-                refresh_timer = vim.defer_fn(function()
-                  refresh_timer = nil
-                  if state.git_root then
-                    M.load_and_render()
-                  end
-                end, 200)
-              end
-
-              vim.api.nvim_create_autocmd("BufWritePost", {
-                callback = function(ev)
-                  if not state.tab then return true end
-                  -- Only refresh for files within the git root
-                  local file = ev.file or ""
-                  if file ~= "" and vim.startswith(file, state.git_root) then
-                    debounced_refresh()
-                  end
-                end,
-              })
-
-              vim.api.nvim_create_autocmd("FocusGained", {
-                callback = function()
-                  if not state.tab then return true end
-                  debounced_refresh()
-                end,
-              })
+              -- Register autocmds (augroup ensures old ones are cleared first)
+              setup_autocmds()
 
               -- Load git data and render panel
               M.load_and_render()
@@ -170,6 +225,7 @@ end
 -- ─── Close ────────────────────────────────────────────────────────────────────
 
 function M.close()
+  teardown_autocmds()
   layout.close()
   state.reset()
 end
@@ -177,7 +233,7 @@ end
 -- ─── Refresh ──────────────────────────────────────────────────────────────────
 
 function M.refresh()
-  if not state.git_root then return end
+  if not state.is_active() then return end
   -- Clear buf cache so git show buffers are re-fetched
   state.buf_cache = {}
   M.load_and_render()
