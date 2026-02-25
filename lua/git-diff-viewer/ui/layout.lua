@@ -8,18 +8,9 @@ local config = require("git-diff-viewer.config")
 
 local M = {}
 
--- Return true if the viewer tab still exists.
-local function tab_is_valid()
-  if not state.tab then return false end
-  for _, t in ipairs(vim.api.nvim_list_tabpages()) do
-    if t == state.tab then return true end
-  end
-  return false
-end
-
 -- Focus the existing viewer tab.
 function M.focus()
-  if tab_is_valid() then
+  if state.is_active() then
     vim.api.nvim_set_current_tabpage(state.tab)
     if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
       vim.api.nvim_set_current_win(state.panel_win)
@@ -58,6 +49,7 @@ function M.create_tab()
   -- Restore focus to the main area so callers can set up the panel from there
   vim.api.nvim_set_current_win(main_win)
 
+  state.main_win = main_win
   state.panel_win = panel_win
   state.diff_wins = {}
   state.diff_bufs = {}
@@ -86,12 +78,13 @@ function M.set_panel_buf(buf)
   end
 end
 
--- Close the viewer tab and clean up state.
+-- Close the viewer tab.
 function M.close()
-  if tab_is_valid() then
-    vim.cmd("tabclose")
+  if state.is_active() then
+    -- Use the tab number (1-indexed position) for tabclose
+    local tab_nr = vim.api.nvim_tabpage_get_number(state.tab)
+    vim.cmd(tab_nr .. "tabclose")
   end
-  -- State reset is handled in init.lua on TabClosed autocmd
 end
 
 -- Open diff windows in the main area (right of the panel).
@@ -112,19 +105,18 @@ function M.open_diff_wins(count)
   state.diff_wins = {}
   state.diff_bufs = {}
 
-  -- Find or create the first diff window (the main area to the right)
-  -- After closing old diff windows, we may need to create a new one.
-  -- Focus the main area (to the right of the panel).
-  if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-    -- Move focus away from panel to open splits in the right area
+  -- Use tracked main_win handle instead of fragile wincmd l
+  local current_win
+  if state.main_win and vim.api.nvim_win_is_valid(state.main_win) then
+    current_win = state.main_win
+    vim.api.nvim_set_current_win(current_win)
+  elseif state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+    -- main_win was closed — create a new one via vsplit from panel
     vim.api.nvim_set_current_win(state.panel_win)
-    vim.cmd("wincmd l") -- move to the right
-  end
-
-  -- If there's no window to the right, we're still in the panel — create one
-  local current_win = vim.api.nvim_get_current_win()
-  if current_win == state.panel_win then
     vim.cmd("vsplit")
+    current_win = vim.api.nvim_get_current_win()
+    state.main_win = current_win
+  else
     current_win = vim.api.nvim_get_current_win()
   end
 

@@ -179,48 +179,38 @@ function M.open()
   -- Single-instance: focus existing tab if it is still open
   if layout.focus() then return end
 
-  -- Detect git repo from the current working directory
   local cwd = vim.fn.getcwd()
 
-  git.is_git_repo(cwd, function(is_repo)
+  -- get_root fails for non-git dirs, so no separate is_git_repo check needed
+  git.get_root(cwd, function(ok, root)
     vim.schedule(function()
-      if not is_repo then
+      if not ok then
         utils.error("Not inside a git repository")
         return
       end
 
-      git.get_root(cwd, function(ok, root)
+      state.reset()
+      state.git_root = root
+
+      git.has_commits(root, function(has)
         vim.schedule(function()
-          if not ok then
-            utils.error("Could not determine git root")
-            return
+          state.has_commits = has
+
+          -- Build UI
+          layout.create_tab()
+          local buf = panel.create_buf()
+          layout.set_panel_buf(buf)
+
+          -- Focus the panel
+          if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+            vim.api.nvim_set_current_win(state.panel_win)
           end
 
-          state.reset()
-          state.git_root = root
+          -- Register autocmds (augroup ensures old ones are cleared first)
+          setup_autocmds()
 
-          -- Check whether the repo has any commits
-          git.has_commits(root, function(has)
-            vim.schedule(function()
-              state.has_commits = has
-
-              -- Build UI
-              layout.create_tab()
-              local buf = panel.create_buf()
-              layout.set_panel_buf(buf)
-
-              -- Focus the panel
-              if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-                vim.api.nvim_set_current_win(state.panel_win)
-              end
-
-              -- Register autocmds (augroup ensures old ones are cleared first)
-              setup_autocmds()
-
-              -- Load git data and render panel
-              M.load_and_render()
-            end)
-          end)
+          -- Load git data and render panel
+          M.load_and_render()
         end)
       end)
     end)

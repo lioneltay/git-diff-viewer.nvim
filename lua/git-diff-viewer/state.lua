@@ -48,6 +48,7 @@ function M.reset()
 
   -- Tab and window handles for the viewer tab
   M.tab = nil        -- tabpage handle
+  M.main_win = nil   -- main diff area window (right of panel)
   M.panel_win = nil  -- left panel window
   M.panel_buf = nil  -- left panel buffer
   M.diff_wins = {}   -- list of diff window handles (1 or 2)
