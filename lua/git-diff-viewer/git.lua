@@ -52,7 +52,7 @@ end
 -- Get NUL-terminated porcelain v1 file status list.
 -- callback(ok: boolean, raw: string)
 function M.status(cwd, callback)
-  run({ "git", "status", "--porcelain=v1", "-z" }, { cwd = cwd }, function(ok, stdout)
+  run({ "git", "status", "--porcelain=v1", "-z", "-uall" }, { cwd = cwd }, function(ok, stdout)
     callback(ok, stdout)
   end)
 end

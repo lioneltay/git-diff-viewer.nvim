@@ -229,6 +229,17 @@ end
 
 -- ─── File watching ────────────────────────────────────────────────────────
 
+-- Stop and clean up all file watchers.
+local function teardown_watchers()
+  for _, w in ipairs(state.watchers) do
+    if not w:is_closing() then
+      w:stop()
+      w:close()
+    end
+  end
+  state.watchers = {}
+end
+
 -- Schedule a debounced refresh from a file watcher callback.
 -- Uses vim.schedule since watcher callbacks fire on the libuv thread.
 local function watcher_refresh()
@@ -277,17 +288,6 @@ local function setup_watchers()
       head_watcher:close()
     end
   end
-end
-
--- Stop and clean up all file watchers.
-local function teardown_watchers()
-  for _, w in ipairs(state.watchers) do
-    if not w:is_closing() then
-      w:stop()
-      w:close()
-    end
-  end
-  state.watchers = {}
 end
 
 -- ─── Open ─────────────────────────────────────────────────────────────────────
