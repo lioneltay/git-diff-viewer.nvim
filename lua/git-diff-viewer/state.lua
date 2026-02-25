@@ -69,6 +69,9 @@ function M.reset()
   -- Key: buffer handle, Value: true
   M.keymap_bufs = {}
 
+  -- Viewed diff history — ordered list of { path, section } for recently opened diffs
+  M.viewed_diffs = {}
+
   -- File watcher handles for .git/index and .git/HEAD
   M.watchers = {}
 

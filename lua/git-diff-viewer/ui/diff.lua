@@ -145,6 +145,11 @@ local function setup_diff_keymaps(buf)
     end
   end, "Focus file panel")
 
+  -- Viewed diffs picker
+  map("<leader>fb", function()
+    require("git-diff-viewer.ui.viewed").open()
+  end, "Browse viewed diffs")
+
   -- Track for cleanup (Bug #11: keymaps on real file buffers must be removed on close)
   state.keymap_bufs[buf] = true
 end
@@ -156,6 +161,7 @@ local function cleanup_diff_keymaps(buf)
   pcall(vim.keymap.del, "n", dk.close, { buffer = buf })
   pcall(vim.keymap.del, "n", dk.open_file, { buffer = buf })
   pcall(vim.keymap.del, "n", dk.focus_panel, { buffer = buf })
+  pcall(vim.keymap.del, "n", "<leader>fb", { buffer = buf })
 end
 
 -- Remove diff keymaps from all tracked buffers. Called on viewer close.
@@ -221,10 +227,24 @@ end
 
 -- ─── Main entry point ─────────────────────────────────────────────────────────
 
+-- Track a viewed diff in the history (most recent first, dedup by path+section).
+local function track_viewed(item)
+  local vd = state.viewed_diffs
+  -- Remove existing entry for this path+section
+  for i = #vd, 1, -1 do
+    if vd[i].path == item.path and vd[i].section == item.section then
+      table.remove(vd, i)
+    end
+  end
+  -- Insert at front (most recent first)
+  table.insert(vd, 1, { path = item.path, section = item.section })
+end
+
 -- Open the diff for a file_item.
 -- This function kicks off async git show calls and renders when ready.
 function M.open(item)
   state.current_diff = { item = item }
+  track_viewed(item)
 
   local cwd = state.git_root
   local path = item.path

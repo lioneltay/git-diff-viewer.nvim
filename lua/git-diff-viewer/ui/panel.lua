@@ -456,6 +456,11 @@ function M.create_buf()
     require("git-diff-viewer.ui.finder").open()
   end, "Find changed files")
 
+  -- Open viewed diffs picker
+  map("<leader>fb", function()
+    require("git-diff-viewer.ui.viewed").open()
+  end, "Browse viewed diffs")
+
   -- Help popup
   map("g?", function()
     local lines = {

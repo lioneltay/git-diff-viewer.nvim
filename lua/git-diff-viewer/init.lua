@@ -55,6 +55,23 @@ local function reconcile_current_diff()
   state.current_diff = nil
 end
 
+-- After refresh, prune viewed_diffs entries that no longer exist in any section.
+local function reconcile_viewed_diffs()
+  local all_paths = {}
+  for _, sec in ipairs(state.sections) do
+    for _, item in ipairs(sec.items) do
+      all_paths[item.path .. ":" .. item.section] = true
+    end
+  end
+  local pruned = {}
+  for _, vd in ipairs(state.viewed_diffs) do
+    if all_paths[vd.path .. ":" .. vd.section] then
+      table.insert(pruned, vd)
+    end
+  end
+  state.viewed_diffs = pruned
+end
+
 -- Fetch git status + numstat in parallel, then render the panel.
 -- Called on open and on refresh.
 -- Uses generation counter to discard stale callbacks.
@@ -96,6 +113,7 @@ function M.load_and_render()
       { key = "staged",    label = "Staged Changes",  items = files.staged },
     }
     reconcile_current_diff()
+    reconcile_viewed_diffs()
     panel.render()
   end
 
