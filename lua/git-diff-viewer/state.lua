@@ -26,8 +26,8 @@ function M.reset()
   -- Stored as flat path strings, e.g. "src/components"
   M.folder_expanded = {}
 
-  -- Current filter string (empty = no filter)
-  M.filter = ""
+  -- Section collapse state: section key → boolean (true = collapsed)
+  M.section_collapsed = {}
 
   -- Currently open diff:
   --   { item = file_item, section = "changes"|"staged"|"conflicts" }
@@ -47,6 +47,9 @@ function M.reset()
 
   -- File watcher handles for .git/index and .git/HEAD
   M.watchers = {}
+
+  -- Namespace for panel highlights
+  M.ns = vim.api.nvim_create_namespace("git_diff_viewer_panel")
 end
 
 -- Initialize on module load

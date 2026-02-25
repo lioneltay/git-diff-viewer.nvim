@@ -33,7 +33,8 @@ local function get_or_create_scratch(cache_key, path)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+  -- "hide" so cached buffers survive when the window is closed (enables buf_cache reuse)
+  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   -- Name gives the buffer a meaningful identity (and preserves extension for icons)
   vim.api.nvim_buf_set_name(buf, "git-diff-viewer://" .. cache_key)
   -- Set filetype from extension — more reliable than `filetype detect` on scratch buffers
@@ -116,6 +117,13 @@ end
 
 -- ─── Single-pane display ──────────────────────────────────────────────────────
 
+-- Restore focus to the panel window.
+local function refocus_panel()
+  if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+    vim.api.nvim_set_current_win(state.panel_win)
+  end
+end
+
 -- Display a single buffer in one diff window (no diff mode).
 local function show_single(buf, readonly)
   local wins = layout.open_diff_wins(1)
@@ -128,8 +136,7 @@ local function show_single(buf, readonly)
     setup_diff_keymaps(buf)
   end
 
-  -- For the working file (editable), just focus it
-  vim.api.nvim_set_current_win(win)
+  refocus_panel()
 end
 
 -- ─── Side-by-side display ─────────────────────────────────────────────────────
@@ -150,9 +157,8 @@ local function show_side_by_side(left_buf, right_buf)
   setup_diff_keymaps(left_buf)
   setup_diff_keymaps(right_buf)
 
-  -- Focus right pane (the "new" side — more useful for editing)
-  vim.api.nvim_set_current_win(right_win)
   jump_to_first_hunk(right_win)
+  refocus_panel()
 end
 
 -- ─── Main entry point ─────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ local diff = require("git-diff-viewer.ui.diff")
 
 function M.setup(opts)
   config.setup(opts)
+  utils.setup_highlights()
 end
 
 -- ─── Internal: load git data and render ───────────────────────────────────────
@@ -108,13 +109,19 @@ function M.open()
                 vim.api.nvim_set_current_win(state.panel_win)
               end
 
-              -- Close viewer if the tab is closed externally
+              -- Clean up state when the viewer tab is closed externally.
+              -- TabClosed fires for ANY tab, so we check whether ours still exists.
               vim.api.nvim_create_autocmd("TabClosed", {
                 callback = function()
-                  -- Reset state when our tab is closed
+                  if not state.tab then return true end -- already cleaned up, remove autocmd
+                  -- Check if our tab is still in the tabpage list
+                  for _, t in ipairs(vim.api.nvim_list_tabpages()) do
+                    if t == state.tab then return end -- viewer tab still alive, ignore
+                  end
+                  -- Our tab was the one closed
                   state.reset()
+                  return true -- remove the autocmd
                 end,
-                once = true,
               })
 
               -- Load git data and render panel
@@ -214,9 +221,10 @@ local function optimistic(action_fn, git_fn)
         state.files = old_files
         panel.render()
         utils.error("Git operation failed: " .. (stderr or ""))
+      else
+        -- Refresh from git to ensure UI matches reality
+        M.load_and_render()
       end
-      -- On success we don't re-render — the optimistic state is correct.
-      -- Auto-refresh (via .git/index watcher) will sync eventually.
     end)
   end)
 end
@@ -304,6 +312,30 @@ function M.stage_item(line)
     end, function(cb)
       git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
     end)
+
+  elseif line.type == "section_header" then
+    -- Stage entire section
+    if line.section == "changes" or line.section == "conflicts" then
+      local paths = {}
+      for _, item in ipairs(state.files[line.section]) do
+        table.insert(paths, item.path)
+      end
+      if #paths == 0 then return end
+
+      optimistic(function()
+        local new_staged = {}
+        for _, item in ipairs(state.files[line.section]) do
+          table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+        end
+        for _, item in ipairs(state.files.staged) do
+          table.insert(new_staged, item)
+        end
+        state.files[line.section] = {}
+        state.files.staged = new_staged
+      end, function(cb)
+        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
+    end
   end
 end
 
@@ -342,6 +374,26 @@ function M.unstage_item(line)
     end, function(cb)
       git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
     end)
+
+  elseif line.type == "section_header" then
+    -- Unstage entire section
+    if line.section == "staged" then
+      local paths = {}
+      for _, item in ipairs(state.files.staged) do
+        table.insert(paths, item.path)
+      end
+      if #paths == 0 then return end
+
+      optimistic(function()
+        for _, item in ipairs(state.files.staged) do
+          local new_status = item.status == "both" and "both" or "unstaged"
+          table.insert(state.files.changes, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+        end
+        state.files.staged = {}
+      end, function(cb)
+        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
+    end
   end
 end
 
@@ -415,17 +467,19 @@ end
 
 function M.stage_all()
   optimistic(function()
-    -- Move all changes/untracked to staged.
-    -- After git add -A, all changes are in the staging area (status = "staged").
-    -- Existing staged items remain as-is.
+    -- git add -A stages everything: changes, untracked, AND conflicts (marks resolved).
     local new_staged = {}
     for _, item in ipairs(state.files.changes) do
+      table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+    end
+    for _, item in ipairs(state.files.conflicts) do
       table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
     end
     for _, item in ipairs(state.files.staged) do
       table.insert(new_staged, item)
     end
     state.files.changes = {}
+    state.files.conflicts = {}
     state.files.staged = new_staged
   end, function(cb)
     git.stage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)

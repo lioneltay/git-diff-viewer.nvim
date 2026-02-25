@@ -84,15 +84,6 @@ function M.warn(msg)
   M.notify(msg, vim.log.levels.WARN)
 end
 
--- Return the path relative to git_root for display purposes.
--- If path does not start with git_root, returns the path unchanged.
-function M.relative_path(path, git_root)
-  if git_root and vim.startswith(path, git_root .. "/") then
-    return path:sub(#git_root + 2)
-  end
-  return path
-end
-
 -- Split a relative file path into directory parts and filename.
 -- e.g. "src/components/Button.tsx" → { dirs = {"src", "components"}, file = "Button.tsx" }
 -- e.g. "main.go" → { dirs = {}, file = "main.go" }
@@ -155,6 +146,43 @@ function M.format_counts(added, removed)
     table.insert(parts, "-" .. removed)
   end
   return table.concat(parts, " ")
+end
+
+-- Define highlight groups that link to standard Neovim groups.
+-- Uses `default = true` so user overrides win.
+function M.setup_highlights()
+  local links = {
+    GitDiffViewerSectionHeader  = "Label",
+    GitDiffViewerSectionCount   = "Identifier",
+    GitDiffViewerFileName       = "Normal",
+    GitDiffViewerFileNameActive = "Type",
+    GitDiffViewerFolderName     = "Directory",
+    GitDiffViewerFolderIcon     = "NonText",
+    GitDiffViewerStatusM        = "diffChanged",
+    GitDiffViewerStatusA        = "diffAdded",
+    GitDiffViewerStatusD        = "diffRemoved",
+    GitDiffViewerStatusR        = "Type",
+    GitDiffViewerStatusConflict = "DiagnosticWarn",
+    GitDiffViewerInsertions     = "diffAdded",
+    GitDiffViewerDeletions      = "diffRemoved",
+    GitDiffViewerDim            = "Comment",
+  }
+  for name, target in pairs(links) do
+    vim.api.nvim_set_hl(0, name, { link = target, default = true })
+  end
+end
+
+-- Return the highlight group for a given status icon character.
+function M.get_status_hl(icon)
+  local map = {
+    M = "GitDiffViewerStatusM",
+    A = "GitDiffViewerStatusA",
+    D = "GitDiffViewerStatusD",
+    R = "GitDiffViewerStatusR",
+    ["?"] = "GitDiffViewerStatusA",
+    ["!"] = "GitDiffViewerStatusConflict",
+  }
+  return map[icon] or "GitDiffViewerStatusM"
 end
 
 return M

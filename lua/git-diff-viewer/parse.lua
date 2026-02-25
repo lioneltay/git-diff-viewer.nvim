@@ -50,9 +50,11 @@ function M.parse_status(raw)
     return entries
   end
 
-  -- Split on NUL bytes; filter empty strings from trailing NUL
+  -- Split on NUL bytes. Lua patterns use %z for NUL, but vim.split is simpler.
+  -- Filter empty strings from trailing NUL.
+  local raw_parts = vim.split(raw, "\0", { plain = true })
   local parts = {}
-  for part in (raw .. "\0"):gmatch("([^\0]*)\0") do
+  for _, part in ipairs(raw_parts) do
     if part ~= "" then
       table.insert(parts, part)
     end
@@ -121,9 +123,10 @@ function M.parse_numstat(raw)
     return result
   end
 
-  -- Split on NUL
+  -- Split on NUL bytes
+  local raw_parts = vim.split(raw, "\0", { plain = true })
   local parts = {}
-  for part in (raw .. "\0"):gmatch("([^\0]*)\0") do
+  for _, part in ipairs(raw_parts) do
     if part ~= "" then
       table.insert(parts, part)
     end
@@ -250,11 +253,5 @@ function M.build_file_list(status_entries, unstaged_numstat, staged_numstat)
   return { conflicts = conflicts, changes = changes, staged = staged }
 end
 
--- Extract file extension from a path for filetype detection.
--- Returns extension string (without dot), or empty string if none.
--- e.g. "src/app.ts" → "ts", "Makefile" → ""
-function M.path_to_ext(path)
-  return path:match("%.([^./]+)$") or ""
-end
 
 return M
