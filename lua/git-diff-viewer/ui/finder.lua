@@ -82,7 +82,7 @@ function M.open()
     if not vim.api.nvim_buf_is_valid(tree_buf) then return end
     rendering = true
 
-    local lines, text, hls = panel.build_lines(state.files, {
+    local lines, text, hls = panel.build_lines(state.sections, {
       filter = filter,
       force_expanded = true,
       skip_header = true,

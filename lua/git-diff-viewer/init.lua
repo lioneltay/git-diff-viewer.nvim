@@ -60,7 +60,12 @@ function M.load_and_render()
     local unstaged_numstat = parse.parse_numstat(unstaged_raw or "")
     local staged_numstat = parse.parse_numstat(staged_raw or "")
 
-    state.files = parse.build_file_list(entries, unstaged_numstat, staged_numstat)
+    local files = parse.build_file_list(entries, unstaged_numstat, staged_numstat)
+    state.sections = {
+      { key = "conflicts", label = "Merge Conflicts", items = files.conflicts },
+      { key = "changes",   label = "Changes",         items = files.changes },
+      { key = "staged",    label = "Staged Changes",  items = files.staged },
+    }
     panel.render()
   end
 
@@ -292,12 +297,16 @@ end
 
 -- ─── Git operations with optimistic UI ───────────────────────────────────────
 
+-- Find a section by key in state.sections.
+local function get_section(key)
+  for _, s in ipairs(state.sections) do
+    if s.key == key then return s end
+  end
+end
+
 -- Optimistic UI helper: immediately re-render, then run git command.
 -- On failure: show error and re-render from fresh git data.
 local function optimistic(action_fn, git_fn)
-  -- Capture pre-action state for rollback
-  local old_files = vim.deepcopy(state.files)
-
   -- Apply optimistic change to state
   action_fn()
   panel.render()
@@ -306,42 +315,27 @@ local function optimistic(action_fn, git_fn)
   git_fn(function(ok, stderr)
     vim.schedule(function()
       if not ok then
-        -- Roll back
-        state.files = old_files
-        panel.render()
         utils.error("Git operation failed: " .. (stderr or ""))
-      else
-        -- Refresh from git to ensure UI matches reality
+      end
+      -- Refresh from git to ensure UI matches reality
+      if state.is_active() then
         M.load_and_render()
       end
     end)
   end)
 end
 
--- Remove an item from all sections of state.files in place.
-local function remove_item(path, section)
-  for _, sec in pairs(state.files) do
-    for i = #sec, 1, -1 do
-      if sec[i].path == path and (section == nil or sec[i].section == section) then
-        table.remove(sec, i)
+-- Remove an item from a section's items list by path.
+-- If section_key is nil, removes from all sections.
+local function remove_item(path, section_key)
+  for _, sec in ipairs(state.sections) do
+    if section_key == nil or sec.key == section_key then
+      for i = #sec.items, 1, -1 do
+        if sec.items[i].path == path then
+          table.remove(sec.items, i)
+        end
       end
     end
-  end
-end
-
--- Move an item from one section to another in state.files.
-local function move_item(path, from_section, to_section)
-  local item = nil
-  local from_list = state.files[from_section]
-  for i = #from_list, 1, -1 do
-    if from_list[i].path == path then
-      item = table.remove(from_list, i)
-      break
-    end
-  end
-  if item then
-    item.section = to_section
-    table.insert(state.files[to_section], item)
   end
 end
 
@@ -354,42 +348,43 @@ function M.stage_item(line)
     local paths = { item.path }
 
     if item.section == "changes" or item.status == "untracked" then
-      -- Stage the file (moves from Changes to Staged; untracked → staged new).
-      -- After git add, all changes become staged (no more unstaged changes), so
-      -- status becomes "staged" regardless of whether it was "unstaged" or "both".
+      local staged_sec = get_section("staged")
       optimistic(function()
         remove_item(item.path, "changes")
         local new_item = vim.tbl_extend("force", item, { section = "staged", status = "staged" })
-        table.insert(state.files.staged, new_item)
+        if staged_sec then table.insert(staged_sec.items, new_item) end
       end, function(cb)
         git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
       end)
 
     elseif item.section == "conflicts" then
-      -- Stage conflict (marks as resolved)
+      local staged_sec = get_section("staged")
       optimistic(function()
         remove_item(item.path, "conflicts")
         local new_item = vim.tbl_extend("force", item, { section = "staged", status = "staged" })
-        table.insert(state.files.staged, new_item)
+        if staged_sec then table.insert(staged_sec.items, new_item) end
       end, function(cb)
         git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
       end)
-
-    else
-      -- No-op for items already staged or in staged section
     end
 
   elseif line.type == "folder" then
     -- Collect all files in this folder that are stageable
     local paths = {}
-    for _, item in ipairs(state.files.changes) do
-      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-        table.insert(paths, item.path)
+    local changes_sec = get_section("changes")
+    local conflicts_sec = get_section("conflicts")
+    if changes_sec then
+      for _, item in ipairs(changes_sec.items) do
+        if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+          table.insert(paths, item.path)
+        end
       end
     end
-    for _, item in ipairs(state.files.conflicts) do
-      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-        table.insert(paths, item.path)
+    if conflicts_sec then
+      for _, item in ipairs(conflicts_sec.items) do
+        if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
+          table.insert(paths, item.path)
+        end
       end
     end
     if #paths == 0 then return end
@@ -405,22 +400,27 @@ function M.stage_item(line)
   elseif line.type == "section_header" then
     -- Stage entire section
     if line.section == "changes" or line.section == "conflicts" then
+      local src_sec = get_section(line.section)
+      local staged_sec = get_section("staged")
+      if not src_sec or #src_sec.items == 0 then return end
+
       local paths = {}
-      for _, item in ipairs(state.files[line.section]) do
+      for _, item in ipairs(src_sec.items) do
         table.insert(paths, item.path)
       end
-      if #paths == 0 then return end
 
       optimistic(function()
         local new_staged = {}
-        for _, item in ipairs(state.files[line.section]) do
+        for _, item in ipairs(src_sec.items) do
           table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
         end
-        for _, item in ipairs(state.files.staged) do
-          table.insert(new_staged, item)
+        if staged_sec then
+          for _, item in ipairs(staged_sec.items) do
+            table.insert(new_staged, item)
+          end
+          staged_sec.items = new_staged
         end
-        state.files[line.section] = {}
-        state.files.staged = new_staged
+        src_sec.items = {}
       end, function(cb)
         git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
       end)
@@ -434,22 +434,22 @@ function M.unstage_item(line)
     if item.section ~= "staged" then return end
 
     local paths = { item.path }
+    local changes_sec = get_section("changes")
 
     optimistic(function()
       remove_item(item.path, "staged")
-      -- After git restore --staged, the staged changes are removed.
-      -- If the file was "both" (MM), it still has unstaged changes → status stays "both".
-      -- If it was "staged" only (M_), it now has only unstaged changes → status = "unstaged".
       local new_status = item.status == "both" and "both" or "unstaged"
       local new_item = vim.tbl_extend("force", item, { section = "changes", status = new_status })
-      table.insert(state.files.changes, new_item)
+      if changes_sec then table.insert(changes_sec.items, new_item) end
     end, function(cb)
       git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
     end)
 
   elseif line.type == "folder" then
+    local staged_sec = get_section("staged")
+    if not staged_sec then return end
     local paths = {}
-    for _, item in ipairs(state.files.staged) do
+    for _, item in ipairs(staged_sec.items) do
       if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
         table.insert(paths, item.path)
       end
@@ -465,20 +465,24 @@ function M.unstage_item(line)
     end)
 
   elseif line.type == "section_header" then
-    -- Unstage entire section
     if line.section == "staged" then
+      local staged_sec = get_section("staged")
+      local changes_sec = get_section("changes")
+      if not staged_sec or #staged_sec.items == 0 then return end
+
       local paths = {}
-      for _, item in ipairs(state.files.staged) do
+      for _, item in ipairs(staged_sec.items) do
         table.insert(paths, item.path)
       end
-      if #paths == 0 then return end
 
       optimistic(function()
-        for _, item in ipairs(state.files.staged) do
-          local new_status = item.status == "both" and "both" or "unstaged"
-          table.insert(state.files.changes, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+        if changes_sec then
+          for _, item in ipairs(staged_sec.items) do
+            local new_status = item.status == "both" and "both" or "unstaged"
+            table.insert(changes_sec.items, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+          end
         end
-        state.files.staged = {}
+        staged_sec.items = {}
       end, function(cb)
         git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
       end)
@@ -508,7 +512,6 @@ function M.discard_item(line)
     end
 
     if item.section == "staged" then
-      -- Staged modified: unstage then restore working tree
       local paths = { item.path }
       optimistic(function()
         remove_item(item.path, "staged")
@@ -523,7 +526,6 @@ function M.discard_item(line)
       return
     end
 
-    -- Unstaged: restore working tree
     if item.section == "changes" then
       local paths = { item.path }
       optimistic(function()
@@ -534,10 +536,12 @@ function M.discard_item(line)
     end
 
   elseif line.type == "folder" then
+    local changes_sec = get_section("changes")
+    if not changes_sec then return end
     local paths = {}
-    for _, item in ipairs(state.files.changes) do
+    for _, item in ipairs(changes_sec.items) do
       if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-        if item.xy ~= "??" then -- skip untracked (can't batch-delete)
+        if item.xy ~= "??" then
           table.insert(paths, item.path)
         end
       end
@@ -555,41 +559,47 @@ function M.discard_item(line)
 end
 
 function M.stage_all()
+  local changes_sec = get_section("changes")
+  local conflicts_sec = get_section("conflicts")
+  local staged_sec = get_section("staged")
+
   optimistic(function()
-    -- git add -A stages everything: changes, untracked, AND conflicts (marks resolved).
     local new_staged = {}
-    for _, item in ipairs(state.files.changes) do
-      table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+    if changes_sec then
+      for _, item in ipairs(changes_sec.items) do
+        table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+      end
+      changes_sec.items = {}
     end
-    for _, item in ipairs(state.files.conflicts) do
-      table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+    if conflicts_sec then
+      for _, item in ipairs(conflicts_sec.items) do
+        table.insert(new_staged, vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
+      end
+      conflicts_sec.items = {}
     end
-    for _, item in ipairs(state.files.staged) do
-      table.insert(new_staged, item)
+    if staged_sec then
+      for _, item in ipairs(staged_sec.items) do
+        table.insert(new_staged, item)
+      end
+      staged_sec.items = new_staged
     end
-    state.files.changes = {}
-    state.files.conflicts = {}
-    state.files.staged = new_staged
   end, function(cb)
     git.stage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
   end)
 end
 
 function M.unstage_all()
+  local staged_sec = get_section("staged")
+  local changes_sec = get_section("changes")
+
   optimistic(function()
-    -- Move all staged items back to changes.
-    -- After git restore --staged ., all staged changes are removed (status = "unstaged").
-    -- "both" items that were in staged are now "both" still but live in changes section.
-    local new_changes = {}
-    for _, item in ipairs(state.files.staged) do
-      local new_status = item.status == "both" and "both" or "unstaged"
-      table.insert(new_changes, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+    if staged_sec and changes_sec then
+      for _, item in ipairs(staged_sec.items) do
+        local new_status = item.status == "both" and "both" or "unstaged"
+        table.insert(changes_sec.items, vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+      end
+      staged_sec.items = {}
     end
-    for _, item in ipairs(state.files.changes) do
-      table.insert(new_changes, item)
-    end
-    state.files.staged = {}
-    state.files.changes = new_changes
   end, function(cb)
     git.unstage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
   end)

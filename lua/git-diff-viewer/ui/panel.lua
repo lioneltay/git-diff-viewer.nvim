@@ -51,12 +51,6 @@ local function build_lines(sections, opts)
     table.insert(highlights, { line = line_idx, group = group, col_start = col_start, col_end = col_end })
   end
 
-  local section_defs = {
-    { key = "conflicts", label = "Merge Conflicts" },
-    { key = "changes",   label = "Changes" },
-    { key = "staged",    label = "Staged Changes" },
-  }
-
   -- Determine the currently-open file path+section for active highlighting
   local active_path, active_section
   if state.current_diff and state.current_diff.item then
@@ -80,8 +74,8 @@ local function build_lines(sections, opts)
 
   local any_content = false
 
-  for _, sec in ipairs(section_defs) do
-    local items = sections[sec.key] or {}
+  for _, sec in ipairs(sections) do
+    local items = sec.items or {}
 
     local filtered = {}
     for _, item in ipairs(items) do
@@ -311,7 +305,7 @@ function M.render()
   end
 
   -- Build new content
-  local lines, text, highlights = build_lines(state.files)
+  local lines, text, highlights = build_lines(state.sections)
   state.panel_lines = lines
 
   -- Write to buffer (temporarily make modifiable)

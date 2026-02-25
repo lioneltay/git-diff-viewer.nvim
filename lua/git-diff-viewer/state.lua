@@ -25,10 +25,11 @@ function M.reset()
   -- Whether HEAD exists (false = empty repo with no commits)
   M.has_commits = false
 
-  -- Structured file list:
-  --   { conflicts = [...], changes = [...], staged = [...] }
-  -- Each entry is a file_item table from parse.build_file_list()
-  M.files = { conflicts = {}, changes = {}, staged = {} }
+  -- Unified file sections — ordered list of { key, label, items }
+  -- Status mode: conflicts, changes, staged
+  -- Branch mode: changes only
+  -- Panel and finder iterate this directly — no mode-specific branching.
+  M.sections = {}
 
   -- Flat list of all currently visible panel lines for cursor mapping.
   -- Each entry: { type = "header"|"folder"|"file", ... }

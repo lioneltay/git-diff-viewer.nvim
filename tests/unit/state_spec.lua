@@ -69,12 +69,12 @@ describe("state", function()
       assert.is_nil(state.git_root)
     end)
 
-    it("resets files to empty sections", function()
-      state.files.changes = { { path = "a.ts" } }
+    it("resets sections to empty list", function()
+      state.sections = {
+        { key = "changes", label = "Changes", items = { { path = "a.ts" } } },
+      }
       state.reset()
-      assert.same({}, state.files.changes)
-      assert.same({}, state.files.staged)
-      assert.same({}, state.files.conflicts)
+      assert.same({}, state.sections)
     end)
 
     it("clears current_diff", function()
