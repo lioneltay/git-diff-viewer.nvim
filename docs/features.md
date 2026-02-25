@@ -64,6 +64,7 @@ The viewer opens in a **dedicated Neovim tab** with a fixed-width panel on the l
 ### Tree Rendering
 - Files grouped into collapsible **sections** (Merge Conflicts, Changes, Staged Changes)
 - Files organized into collapsible **folder trees** based on their directory structure
+- **Compact folders:** Single-child folder chains are collapsed into one line (e.g., `src/components/shared/` instead of nested `src/` → `components/` → `shared/`)
 - Each file shows: status icon, file icon (via mini.icons), filename, +/- counts
 - Renamed files show: `old_name → new_name`
 - Binary files annotated with `[binary]`, submodules with `[submodule]`
@@ -123,15 +124,20 @@ The viewer opens in a **dedicated Neovim tab** with a fixed-width panel on the l
 ### Buffer Caching
 - Git show buffers (HEAD, staged, ref content) are cached by key (e.g. `"HEAD:src/app.ts"`)
 - Cache keys include the ref, so different refs don't collide
-- Buffers use `bufhidden=hide` so they survive window close
-- Cache is cleared on refresh (old buffers wiped, displayed buffers preserved)
+- Buffers use `bufhidden=hide` so they survive window close for jumplist navigation
+- Cache is cleared on refresh, but displayed buffer entries are preserved
 - Orphaned buffers (from cache clears) are detected by name and reused
+
+### Window Reuse
+- Diff windows are reused when the pane count matches (avoids creating/destroying windows)
+- Layout transitions (2→1, 1→2) are handled smoothly
+- Enables native Neovim jumplist navigation (Ctrl-O/Ctrl-I) between previously viewed diffs
 
 ---
 
 ## Git Operations (Status Mode Only)
 
-All operations use **optimistic UI** — the panel updates immediately, then the git command runs asynchronously. On failure, the UI rolls back to the pre-operation state.
+All operations use a **fire-and-forget** pattern — the git command runs asynchronously, and a debounced refresh updates the panel when the command completes. This avoids the stale-snapshot bugs of optimistic rollback.
 
 ### Stage (`s`)
 - **File in Changes/Conflicts:** `git add -- <path>` → moves to Staged
@@ -140,23 +146,21 @@ All operations use **optimistic UI** — the panel updates immediately, then the
 
 ### Unstage (`u`)
 - **File in Staged:** `git restore --staged -- <path>` → moves to Changes
+- **Empty repo:** Uses `git rm --cached -- <path>` (no HEAD to restore from)
 - **Folder:** Unstages all files under the folder path
 - **Section header (Staged):** Unstages all files
 
 ### Discard (`x`)
 - **Untracked file:** Prompts for confirmation, then deletes from disk via `os.remove()`
 - **Unstaged file:** `git restore -- <path>` → restores working tree from index
-- **Staged file:** `git restore --staged -- <path>` then `git restore -- <path>` → unstage + restore
-- **Folder:** Discards all tracked unstaged files under the folder path (skips untracked)
+- **Staged file:** `git checkout HEAD -- <path>` → atomic unstage + restore in one step
+- **Folder:** Prompts for confirmation, then discards all tracked files under the folder path
 
 ### Stage All (`S`)
 - `git add -A` → stages everything (changes, untracked, conflicts)
 
 ### Unstage All (`U`)
 - `git restore --staged .` → unstages everything
-
-### Branch Mode Guards
-All 5 mutation functions (`stage_item`, `unstage_item`, `discard_item`, `stage_all`, `unstage_all`) silently return in branch mode.
 
 ---
 
@@ -166,6 +170,21 @@ All 5 mutation functions (`stage_item`, `unstage_item`, `discard_item`, `stage_a
 - Works from both the panel and the diff panes
 - Wraps around at the beginning/end of the file list
 - Opens the appropriate diff (status or branch) based on current mode
+
+---
+
+## Viewed Diffs Picker
+
+**Trigger:** `<leader>fb` from panel or diff panes
+
+A floating window showing recently viewed diffs (most recent first). Selecting an entry re-opens that diff.
+
+**Features:**
+- Tracks diffs as they are opened (most recent first)
+- Shows status icon, file path, and section label (`[staged]`, `[conflict]`)
+- Stale entries (resolved files) are automatically pruned on refresh
+- `<CR>` to open selected diff
+- `<Esc>` / `q` / `<leader>fb` to close
 
 ---
 
@@ -193,9 +212,10 @@ A floating two-window picker:
 
 - **BufWritePost:** Refreshes when any file within the git root is saved (debounced 200ms)
 - **FocusGained:** Refreshes when Neovim regains focus (debounced 200ms)
+- **File watching:** Watches `.git/index` and `.git/HEAD` via `vim.uv.new_fs_event()` to detect external changes (staging from CLI, commits from other tools, branch switches)
 - **Manual:** `R` key in the panel
 
-Refresh re-fetches all git data and re-renders the panel. In branch mode, it re-fetches the name-status and numstat.
+Refresh re-fetches all git data and re-renders the panel. A generation counter discards stale async callbacks from earlier refresh cycles.
 
 ---
 
@@ -218,6 +238,7 @@ Refresh re-fetches all git data and re-renders the panel. In branch mode, it re-
 | `<Tab>` | Next file | `next_file` |
 | `<S-Tab>` | Previous file | `prev_file` |
 | `<leader>ff` | Open finder | — (hardcoded) |
+| `<leader>fb` | Open viewed diffs picker | — (hardcoded) |
 | `g?` | Show help popup | — (hardcoded) |
 
 ### Diff Pane Keymaps (configurable via `opts.diff_keymaps`)
@@ -228,6 +249,7 @@ Refresh re-fetches all git data and re-renders the panel. In branch mode, it re-
 | `gf` | Open file in previous tab | `open_file` |
 | `<C-h>` | Focus panel | `focus_panel` |
 | `<leader>ff` | Open finder | — (hardcoded) |
+| `<leader>fb` | Open viewed diffs picker | — (hardcoded) |
 | `<Tab>` | Next file | — (uses `keymaps.next_file`) |
 | `<S-Tab>` | Previous file | — (uses `keymaps.prev_file`) |
 
@@ -309,83 +331,25 @@ All linked with `default = true` so user overrides win.
 
 ---
 
-## Known Issues & Gaps (Comprehensive Review)
+## Resolved Issues
 
-### Critical Bugs
+All 27 previously documented bugs have been fixed. Key fixes:
 
-1. **Concurrent optimistic operations corrupt state on rollback.** `optimistic()` captures `old_files = vim.deepcopy(state.files)` at call time. If user stages file A then immediately stages file B before A's git command completes, B captures A's optimistic state as its baseline. If A fails and rolls back, B's optimistic change is silently lost. Both rollbacks reference wrong snapshots. *File: init.lua, optimistic()*
+- **Async safety:** Generation counter rejects stale callbacks; `state.is_active()` guards all async paths
+- **Autocmd lifecycle:** Single `"GitDiffViewer"` augroup with batch-clear on close
+- **Operations:** Fire-and-forget pattern replaces fragile optimistic rollback; atomic `git checkout HEAD --` for staged discard
+- **Diff keymaps:** Always applied (including read-only panes); tracked and cleaned up on viewer close
+- **Data model:** Unified `state.sections` replaces conditional `state.files`/`state.branch_files`
+- **Window tracking:** `state.main_win` replaces fragile `wincmd l`; `state.origin_tab` for correct `gf` navigation
+- **Empty repo:** Uses `git rm --cached` for unstage when HEAD doesn't exist
+- **Folder operations:** Stage/unstage properly moves items between sections; discard prompts for confirmation
 
-2. **Staged renames use wrong path for HEAD content.** In `diff.open()`, when a renamed file is in the staged section, the code uses `"HEAD:" .. path` (the new name) for the left pane. But HEAD has the file at the old name (`item.orig_path`). The `git show` fails and shows an error message instead of the old file content. The default branch correctly uses `item.orig_path or path`, but staged items are caught earlier and never reach it. *File: ui/diff.lua, section == "staged" branch*
+### Remaining Feature Gaps
 
-### High Severity Bugs
-
-3. **Stale `current_diff` reference after staging.** When staging a file, `remove_item` removes it from `state.files.changes` and `panel.render()` rebuilds `panel_lines`, but `state.current_diff` still references the old item object with `section = "changes"`. The panel active highlight is lost, and pressing Enter on the now-staged item uses wrong section logic for diff display. *File: init.lua, stage_item()*
-
-4. **Non-atomic unstage+discard with incomplete rollback.** Discarding a staged file runs `git.unstage` then `git.discard` sequentially. If unstage succeeds but discard fails, the rollback restores `old_files` (showing the file as staged), but git has already unstaged it. The UI and git state diverge. *File: init.lua, discard_item() staged path*
-
-5. **Autocmd accumulation on repeated open/close.** Every `open()` and `open_branch()` call creates new WinNew, TabClosed autocmds. The self-removal check (`if not state.tab then return true end`) fails when a new viewer is opened because `state.tab` points to the new tab, so old autocmds never self-remove. Each open/close cycle adds more stale autocmds. Additionally, switching from `open()` to `open_branch()` (or vice versa) leaves orphaned autocmds from the previous mode. *File: init.lua, open() and open_branch()*
-
-6. **Folder unstage doesn't move items to changes section.** The folder unstage optimistic action calls `remove_item(p, "staged")` for each file, removing them from staged. But unlike the single-file unstage, it never adds items back to `state.files.changes`. Files vanish from the UI entirely until the real git refresh arrives. *File: init.lua, unstage_item() folder path*
-
-7. **Folder stage doesn't move items to staged section.** Same as above but reversed. Folder staging calls `remove_item(p, nil)` (removes from ALL sections) but never inserts into `state.files.staged`. *File: init.lua, stage_item() folder path*
-
-### Medium Severity Bugs
-
-8. **BufWritePost/FocusGained autocmds also accumulate.** Same leak pattern as the WinNew/TabClosed autocmds. Each open/close cycle adds orphaned refresh autocmds. *File: init.lua, open()*
-
-9. **`open_branch()` missing auto-refresh triggers.** Only `open()` creates BufWritePost/FocusGained autocmds. Branch mode has no auto-refresh on file save or focus gain — only manual `R`. *File: init.lua, open_branch()*
-
-10. **Read-only single panes have no keymaps.** `show_single(buf, true)` skips `setup_diff_keymaps`. This means `q`, `gf`, `<Tab>`/`<S-Tab>`, `<leader>ff`, and `<C-h>` don't work when viewing staged new files, deleted files, binary/submodule messages, or branch-mode added/deleted files. *File: ui/diff.lua, show_single()*
-
-11. **Diff keymaps pollute real file buffers.** When displaying unstaged modified files, `setup_diff_keymaps` is called on the actual working file buffer. These keymaps (like `q` to close the viewer) persist after the viewer is closed, causing unexpected behavior when the file is later opened in a normal buffer. *File: ui/diff.lua, setup_diff_keymaps()*
-
-12. **`gf` (open_file) uses `tabprevious` which may navigate to wrong tab.** If the user has rearranged tabs or opened new tabs since opening the viewer, `tabprevious` goes to the wrong tab instead of the original editing tab. *File: ui/panel.lua and ui/diff.lua*
-
-13. **Stale async callbacks overwrite new viewer state.** If `load_and_render()` is in flight when the viewer is closed and reopened, the old callbacks may fire after the new viewer's callbacks, overwriting `state.files` with stale data. There is no generation counter or cancellation token. Works by accident (buffer validity check prevents panel.render from running) rather than by design. *File: init.lua, load_and_render()*
-
-14. **`open_diff_wins` can create windows in wrong tab.** The function never verifies that the current tabpage matches `state.tab`. If the user switches tabs between an async git show call and the `vim.schedule` callback, diff windows are created in the wrong tab. *File: ui/layout.lua, open_diff_wins()*
-
-15. **Panel buffer name collision.** `panel.create_buf()` always names the buffer `"GitDiffViewer"`. If the old panel buffer survives (e.g., displayed in another window), reopening fails with E95. `state.reset()` does not explicitly delete the panel buffer. *File: ui/panel.lua, create_buf()*
-
-16. **Wrong optimistic status for newly added files on unstage.** When unstaging a staged new file (`A_`), the optimistic UI creates an item with `status = "unstaged"` in the changes section. In reality, `git restore --staged` makes it an untracked file (`??`). The UI briefly shows the wrong status icon and diff logic for the item is wrong until refresh. *File: init.lua, unstage_item()*
-
-17. **Empty repo: `git restore --staged` fails.** In a repo with no commits, unstage operations produce `fatal: could not resolve HEAD`. The error message is not user-friendly. *File: init.lua, unstage operations*
-
-18. **`refresh()` clears buf_cache but doesn't re-cache displayed buffers.** After clearing the cache map, displayed buffers survive but lose their cache entry. The orphaned buffer detection in `get_or_create_scratch` finds them, but their content may be stale. *File: init.lua, refresh()*
-
-19. **No guard against opening diff when viewer is already closed.** Async git show callbacks in `diff.open()` and `diff.open_branch()` don't check if the viewer tab still exists before creating windows. *File: ui/diff.lua*
-
-### Low Severity Bugs
-
-20. **Double `state.reset()` on close.** `layout.close()` triggers the TabClosed autocmd which calls `state.reset()`, then `M.close()` calls it again. The second reset is harmless but wasteful. *File: init.lua, close()*
-
-21. **`move_item()` function is defined but never called.** Dead code. *File: init.lua*
-
-22. **Double keymap setup for conflict/untracked.** `setup_diff_keymaps(working_buf)` is called explicitly, then `show_single(working_buf, false)` calls it again. Harmless but wasteful. *File: ui/diff.lua*
-
-23. **`refresh_timer` not cleaned up on close.** The debounce timer may still be pending after close. Guards prevent actual damage, but the timer object persists. *File: init.lua*
-
-24. **Finder tree_buf validity race.** The `vim.schedule` wrapping in the TextChanged autocmd creates a gap between the validity check and the buffer modification in `render_tree`. *File: ui/finder.lua*
-
-25. **`equalalways` not protected by pcall.** If a window operation throws between saving and restoring `vim.o.equalalways`, the global setting is permanently changed. *File: ui/layout.lua*
-
-26. **`path_to_ft` falls back to raw extension.** Unknown extensions like `.xyz` return `"xyz"` as filetype, which could trigger unexpected ftplugin loading. *File: utils.lua*
-
-27. **`discard_item` on folder doesn't prompt for confirmation.** Individual untracked files get a confirmation prompt, but folder-level discard silently discards all tracked files. *File: init.lua*
-
-### Feature Gaps
-
-1. **`filter` keymap (`/`) is configured but never wired up.** Exists in `config.defaults.keymaps` but no code uses `km.filter`. The finder uses `<leader>ff` instead.
-
+1. **`filter` keymap (`/`) is configured but never wired up.** The finder uses `<leader>ff` instead.
 2. **No help popup update for branch mode.** The `g?` popup shows stage/unstage/discard keymaps that don't work in branch mode.
-
-3. **No `<Esc>` to close from panel.** Only `q` closes. Many similar plugins support `<Esc>`.
-
-4. **No timeout or feedback for hung git operations.** If `vim.system()` hangs (e.g., git waiting for credentials), the plugin is stuck with no user feedback.
-
-5. **No compact folder rendering.** Single-child folder chains render as nested levels (`a/` → `b/` → `c/`) instead of compacted into one line (`a/b/c/`). VS Code and many tree plugins compact these.
-
-6. **No file watching for external changes.** The viewer only refreshes on `BufWritePost`, `FocusGained`, or manual `R`. Files edited externally (by AI tools, other editors) don't trigger a refresh until the user refocuses Neovim. The `state.watchers` field exists in state.lua but is never used. Could use `vim.uv.new_fs_event()` to watch `.git/index` and the working directory.
+3. **No `<Esc>` to close from panel.** Only `q` closes.
+4. **No timeout or feedback for hung git operations.** If `vim.system()` hangs, the plugin is stuck with no user feedback.
 
 ---
 
@@ -400,15 +364,17 @@ All linked with `default = true` so user overrides win.
 
 ```
 lua/git-diff-viewer/
-├── init.lua        — Entry point, setup, open/close, refresh, git operations, commands
-├── config.lua      — Default config + user overrides
-├── state.lua       — Singleton mutable state
-├── git.lua         — Async git command wrappers
-├── parse.lua       — Git output parsers
-├── utils.lua       — Shared helpers (icons, highlights, path utils)
+├── init.lua            — Entry point: setup, open/close, refresh, navigation, autocmds, file watchers
+├── config.lua          — Default config + user overrides
+├── state.lua           — Singleton mutable state + generation counter + is_active()
+├── git.lua             — Async git command wrappers
+├── parse.lua           — Git output parsers
+├── utils.lua           — Shared helpers (icons, highlights, path utils)
+├── operations.lua      — Stage/unstage/discard with fire-and-forget pattern
 └── ui/
-    ├── layout.lua  — Tab/window management
-    ├── panel.lua   — File panel rendering + keymaps
-    ├── diff.lua    — Diff buffer loading + display
-    └── finder.lua  — Floating file picker
+    ├── layout.lua      — Tab/window management with window reuse
+    ├── panel.lua       — File panel rendering (tree → compact → render) + keymaps
+    ├── diff.lua        — Diff buffer loading + display + keymap lifecycle
+    ├── finder.lua      — Floating fuzzy file picker
+    └── viewed.lua      — Viewed diffs history picker
 ```
