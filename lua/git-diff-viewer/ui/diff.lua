@@ -66,6 +66,31 @@ local function message_buf(msg)
   return buf
 end
 
+-- ─── Async content loader ───────────────────────────────────────────────────
+
+-- Load git content into a scratch buffer asynchronously.
+-- git_fn: function(callback) — the git.show_head / git.show_staged call
+-- buf: target scratch buffer
+-- error_msg: string to show on failure
+-- on_done: optional callback called after content is loaded
+local function load_git_content(git_fn, buf, error_msg, on_done)
+  git_fn(function(ok, content)
+    vim.schedule(function()
+      -- Guard: viewer may have closed while async was in flight
+      if not state.is_active() then return end
+
+      if ok then
+        local lines = vim.split(content, "\n", { plain = true })
+        if lines[#lines] == "" then table.remove(lines) end
+        set_buf_content(buf, lines)
+      else
+        set_buf_content(buf, { error_msg })
+      end
+      if on_done then on_done() end
+    end)
+  end)
+end
+
 -- ─── Window setup ─────────────────────────────────────────────────────────────
 
 -- Apply diff mode settings to a window (both panes must already be set up).
@@ -78,7 +103,7 @@ local function enable_diff_mode(win)
   vim.api.nvim_set_option_value("foldlevel", 999, { win = win }) -- show all
 end
 
--- Set up keymaps in a diff buffer.
+-- Set up keymaps in a diff buffer, tracking for cleanup.
 local function setup_diff_keymaps(buf)
   local dk = config.options.diff_keymaps
 
@@ -94,7 +119,12 @@ local function setup_diff_keymaps(buf)
     local item = state.current_diff and state.current_diff.item
     if item then
       local full_path = state.git_root .. "/" .. item.path
-      vim.cmd("tabprevious")
+      -- Bug #12: use tracked origin tab instead of tabprevious
+      if state.origin_tab and vim.api.nvim_tabpage_is_valid(state.origin_tab) then
+        vim.api.nvim_set_current_tabpage(state.origin_tab)
+      else
+        vim.cmd("tabprevious")
+      end
       vim.cmd("edit " .. vim.fn.fnameescape(full_path))
     end
   end, "Open file in previous tab")
@@ -104,6 +134,26 @@ local function setup_diff_keymaps(buf)
       vim.api.nvim_set_current_win(state.panel_win)
     end
   end, "Focus file panel")
+
+  -- Track for cleanup (Bug #11: keymaps on real file buffers must be removed on close)
+  state.keymap_bufs[buf] = true
+end
+
+-- Remove diff keymaps from a single buffer.
+local function cleanup_diff_keymaps(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local dk = config.options.diff_keymaps
+  pcall(vim.keymap.del, "n", dk.close, { buffer = buf })
+  pcall(vim.keymap.del, "n", dk.open_file, { buffer = buf })
+  pcall(vim.keymap.del, "n", dk.focus_panel, { buffer = buf })
+end
+
+-- Remove diff keymaps from all tracked buffers. Called on viewer close.
+function M.cleanup_all_keymaps()
+  for buf, _ in pairs(state.keymap_bufs) do
+    cleanup_diff_keymaps(buf)
+  end
+  state.keymap_bufs = {}
 end
 
 -- Jump to the first change hunk after diff mode is enabled.
@@ -125,17 +175,15 @@ local function refocus_panel()
 end
 
 -- Display a single buffer in one diff window (no diff mode).
-local function show_single(buf, readonly)
+-- Always sets up keymaps (Bug #10: readonly panes need q/gf/<C-h> too).
+local function show_single(buf)
   local wins = layout.open_diff_wins(1)
   local win = wins[1]
 
   vim.api.nvim_win_set_buf(win, buf)
   state.diff_bufs = { buf }
 
-  if not readonly then
-    setup_diff_keymaps(buf)
-  end
-
+  setup_diff_keymaps(buf)
   refocus_panel()
 end
 
@@ -176,35 +224,34 @@ function M.open(item)
   -- Binary file — show message
   if item.binary then
     local buf = message_buf("Binary file — cannot display diff")
-    show_single(buf, true)
+    show_single(buf)
     return
   end
 
   -- Submodule — show message
   if item.submodule then
     local buf = message_buf("Submodule — diff not supported")
-    show_single(buf, true)
+    show_single(buf)
     return
   end
 
   -- Merge conflict — single editable pane (working file with raw markers)
+  -- Bug #22 fix: removed explicit setup_diff_keymaps here — show_single handles it
   if section == "conflicts" then
     local full_path = cwd .. "/" .. path
-    -- Load the actual working file buffer (or find it if already open)
     local working_buf = vim.fn.bufnr(full_path, true)
     vim.fn.bufload(working_buf)
-    setup_diff_keymaps(working_buf)
-    show_single(working_buf, false)
+    show_single(working_buf)
     return
   end
 
   -- Untracked — single editable pane
+  -- Bug #22 fix: removed explicit setup_diff_keymaps here — show_single handles it
   if xy == "??" then
     local full_path = cwd .. "/" .. path
     local working_buf = vim.fn.bufnr(full_path, true)
     vim.fn.bufload(working_buf)
-    setup_diff_keymaps(working_buf)
-    show_single(working_buf, false)
+    show_single(working_buf)
     return
   end
 
@@ -215,55 +262,34 @@ function M.open(item)
   if x == "A" and (y == " " or y == "-") then
     local cache_key = ":0:" .. path
     local staged_buf = get_or_create_scratch(cache_key, path)
-    git.show_staged(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          -- Remove trailing empty line from git output
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(staged_buf, lines)
-        else
-          set_buf_content(staged_buf, { "(error loading staged content)" })
-        end
-        show_single(staged_buf, true)
-      end)
-    end)
+    load_git_content(
+      function(cb) git.show_staged(cwd, path, cb) end,
+      staged_buf,
+      "(error loading staged content)",
+      function() show_single(staged_buf) end
+    )
     return
   end
 
   -- Deleted unstaged (_D) or staged (D_) — single pane showing HEAD content
   if x == "D" or y == "D" then
-    -- For staged deletion, show what was at HEAD (left pane only)
     local cache_key = "HEAD:" .. path
     local head_buf = get_or_create_scratch(cache_key, path)
     if not state.has_commits then
       set_buf_content(head_buf, { "(no base commit)" })
-      show_single(head_buf, true)
+      show_single(head_buf)
       return
     end
-    git.show_head(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(head_buf, lines)
-        else
-          set_buf_content(head_buf, { "(error loading HEAD content)" })
-        end
-        show_single(head_buf, true)
-      end)
-    end)
+    load_git_content(
+      function(cb) git.show_head(cwd, path, cb) end,
+      head_buf,
+      "(error loading HEAD content)",
+      function() show_single(head_buf) end
+    )
     return
   end
 
   -- From here: side-by-side layouts
-  -- Determine which content goes on left and right based on section and XY
-
-  -- MM in Changes → left = staged (:0:), right = working file
-  -- MM in Staged  → left = HEAD, right = staged (:0:)
-  -- Modified staged (M_) → left = HEAD, right = staged (:0:)
-  -- Modified unstaged (_M) → left = HEAD, right = working file
-  -- Renamed → left = HEAD:old_path, right = working file
 
   local left_buf, right_buf
 
@@ -282,18 +308,12 @@ function M.open(item)
       return
     end
 
-    git.show_staged(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(left_buf, lines)
-        else
-          set_buf_content(left_buf, { "(error loading staged content)" })
-        end
-        show_side_by_side(left_buf, right_buf)
-      end)
-    end)
+    load_git_content(
+      function(cb) git.show_staged(cwd, path, cb) end,
+      left_buf,
+      "(error loading staged content)",
+      function() show_side_by_side(left_buf, right_buf) end
+    )
     return
   end
 
@@ -318,39 +338,28 @@ function M.open(item)
       end
     end
 
-    git.show_head(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(left_buf, lines)
-        else
-          set_buf_content(left_buf, { "(error loading HEAD content)" })
-        end
-        done()
-      end)
-    end)
-
-    git.show_staged(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(right_buf, lines)
-        else
-          set_buf_content(right_buf, { "(error loading staged content)" })
-        end
-        done()
-      end)
-    end)
+    load_git_content(
+      function(cb) git.show_head(cwd, path, cb) end,
+      left_buf,
+      "(error loading HEAD content)",
+      done
+    )
+    load_git_content(
+      function(cb) git.show_staged(cwd, path, cb) end,
+      right_buf,
+      "(error loading staged content)",
+      done
+    )
     return
   end
 
   if section == "staged" then
     -- Staged modified: left = HEAD, right = staged :0:
-    local head_key = "HEAD:" .. path
+    -- Bug #2 fix: use orig_path for HEAD key (renamed files have old content at orig_path)
+    local old_path = item.orig_path or path
+    local head_key = "HEAD:" .. old_path
     local staged_key = ":0:" .. path
-    left_buf = get_or_create_scratch(head_key, path)
+    left_buf = get_or_create_scratch(head_key, old_path)
     right_buf = get_or_create_scratch(staged_key, path)
 
     if not state.has_commits then
@@ -367,30 +376,18 @@ function M.open(item)
       end
     end
 
-    git.show_head(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(left_buf, lines)
-        else
-          set_buf_content(left_buf, { "(error loading HEAD content)" })
-        end
-        done()
-      end)
-    end)
-    git.show_staged(cwd, path, function(ok, content)
-      vim.schedule(function()
-        if ok then
-          local lines = vim.split(content, "\n", { plain = true })
-          if lines[#lines] == "" then table.remove(lines) end
-          set_buf_content(right_buf, lines)
-        else
-          set_buf_content(right_buf, { "(error loading staged content)" })
-        end
-        done()
-      end)
-    end)
+    load_git_content(
+      function(cb) git.show_head(cwd, old_path, cb) end,
+      left_buf,
+      "(error loading HEAD content)",
+      done
+    )
+    load_git_content(
+      function(cb) git.show_staged(cwd, path, cb) end,
+      right_buf,
+      "(error loading staged content)",
+      done
+    )
     return
   end
 
@@ -410,18 +407,12 @@ function M.open(item)
     return
   end
 
-  git.show_head(cwd, old_path, function(ok, content)
-    vim.schedule(function()
-      if ok then
-        local lines = vim.split(content, "\n", { plain = true })
-        if lines[#lines] == "" then table.remove(lines) end
-        set_buf_content(left_buf, lines)
-      else
-        set_buf_content(left_buf, { "(error loading HEAD content)" })
-      end
-      show_side_by_side(left_buf, right_buf)
-    end)
-  end)
+  load_git_content(
+    function(cb) git.show_head(cwd, old_path, cb) end,
+    left_buf,
+    "(error loading HEAD content)",
+    function() show_side_by_side(left_buf, right_buf) end
+  )
 end
 
 return M

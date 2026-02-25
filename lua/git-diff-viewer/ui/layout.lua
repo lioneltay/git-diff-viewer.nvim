@@ -92,52 +92,57 @@ end
 -- count: 1 (single pane) or 2 (side-by-side)
 -- Returns list of window handles.
 function M.open_diff_wins(count)
-  -- Prevent Neovim from equalizing window widths during open/close
+  -- Bug #25: Prevent Neovim from equalizing window widths during open/close.
+  -- Use pcall to guarantee equalalways is always restored even if operations throw.
   local ea = vim.o.equalalways
   vim.o.equalalways = false
 
-  -- Close existing diff windows (but keep the panel)
-  for _, w in ipairs(state.diff_wins) do
-    if vim.api.nvim_win_is_valid(w) and w ~= state.panel_win then
-      vim.api.nvim_win_close(w, true)
+  local ok, wins = pcall(function()
+    -- Close existing diff windows (but keep the panel)
+    for _, w in ipairs(state.diff_wins) do
+      if vim.api.nvim_win_is_valid(w) and w ~= state.panel_win then
+        vim.api.nvim_win_close(w, true)
+      end
     end
-  end
-  state.diff_wins = {}
-  state.diff_bufs = {}
+    state.diff_wins = {}
+    state.diff_bufs = {}
 
-  -- Use tracked main_win handle instead of fragile wincmd l
-  local current_win
-  if state.main_win and vim.api.nvim_win_is_valid(state.main_win) then
-    current_win = state.main_win
-    vim.api.nvim_set_current_win(current_win)
-  elseif state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-    -- main_win was closed — create a new one via vsplit from panel
-    vim.api.nvim_set_current_win(state.panel_win)
-    vim.cmd("vsplit")
-    current_win = vim.api.nvim_get_current_win()
-    state.main_win = current_win
-  else
-    current_win = vim.api.nvim_get_current_win()
-  end
+    -- Use tracked main_win handle instead of fragile wincmd l
+    local current_win
+    if state.main_win and vim.api.nvim_win_is_valid(state.main_win) then
+      current_win = state.main_win
+      vim.api.nvim_set_current_win(current_win)
+    elseif state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+      -- main_win was closed — create a new one via vsplit from panel
+      vim.api.nvim_set_current_win(state.panel_win)
+      vim.cmd("vsplit")
+      current_win = vim.api.nvim_get_current_win()
+      state.main_win = current_win
+    else
+      current_win = vim.api.nvim_get_current_win()
+    end
 
-  local wins = { current_win }
+    local w = { current_win }
 
-  if count == 2 then
-    -- Split the current window vertically for the second pane
-    vim.cmd("vsplit")
-    table.insert(wins, vim.api.nvim_get_current_win())
-    -- Focus the left (first) pane
-    vim.api.nvim_set_current_win(wins[1])
-  end
+    if count == 2 then
+      -- Split the current window vertically for the second pane
+      vim.cmd("vsplit")
+      table.insert(w, vim.api.nvim_get_current_win())
+      -- Focus the left (first) pane
+      vim.api.nvim_set_current_win(w[1])
+    end
 
-  state.diff_wins = wins
+    state.diff_wins = w
+    return w
+  end)
 
-  -- Re-enforce panel width and restore equalalways
+  -- Always restore panel width and equalalways
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-    vim.api.nvim_win_set_width(state.panel_win, config.options.panel_width)
+    pcall(vim.api.nvim_win_set_width, state.panel_win, config.options.panel_width)
   end
   vim.o.equalalways = ea
 
+  if not ok then error(wins) end
   return wins
 end
 

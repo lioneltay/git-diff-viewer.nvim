@@ -368,13 +368,17 @@ function M.create_buf()
     require("git-diff-viewer").refresh()
   end, "Refresh")
 
-  -- Open file in previous tab
+  -- Open file in the originating tab
   map(km.open_file, function()
     local line = current_line()
     if line and line.type == "file" then
       local full_path = state.git_root .. "/" .. line.item.path
-      -- Open in the tab that was active before the viewer
-      vim.cmd("tabprevious")
+      -- Bug #12: use tracked origin tab instead of tabprevious
+      if state.origin_tab and vim.api.nvim_tabpage_is_valid(state.origin_tab) then
+        vim.api.nvim_set_current_tabpage(state.origin_tab)
+      else
+        vim.cmd("tabprevious")
+      end
       vim.cmd("edit " .. vim.fn.fnameescape(full_path))
     end
   end, "Open file in previous tab")

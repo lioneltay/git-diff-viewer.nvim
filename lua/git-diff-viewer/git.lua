@@ -137,6 +137,32 @@ function M.discard(cwd, paths, callback)
   end)
 end
 
+-- Atomically discard staged changes by restoring from HEAD.
+-- `git checkout HEAD -- <paths>` unstages AND restores in one step.
+-- callback(ok: boolean, stderr: string)
+function M.checkout_head(cwd, paths, callback)
+  local args = { "git", "checkout", "HEAD", "--" }
+  for _, p in ipairs(paths) do
+    table.insert(args, p)
+  end
+  run(args, { cwd = cwd }, function(ok, _, stderr)
+    callback(ok, stderr)
+  end)
+end
+
+-- Remove files from index only (for empty repos where git restore --staged fails).
+-- `git rm --cached -- <paths>` removes from staging without touching working tree.
+-- callback(ok: boolean, stderr: string)
+function M.rm_cached(cwd, paths, callback)
+  local args = { "git", "rm", "--cached", "--" }
+  for _, p in ipairs(paths) do
+    table.insert(args, p)
+  end
+  run(args, { cwd = cwd }, function(ok, _, stderr)
+    callback(ok, stderr)
+  end)
+end
+
 -- Stage all changes (equivalent to `git add -A`).
 -- callback(ok: boolean, stderr: string)
 function M.stage_all(cwd, callback)

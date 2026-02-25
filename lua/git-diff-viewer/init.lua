@@ -28,6 +28,33 @@ end
 
 -- ─── Internal: load git data and render ───────────────────────────────────────
 
+-- Bug #3: After sections are rebuilt, update current_diff to reference
+-- the new item object (by path+section match, then path-only fallback).
+local function reconcile_current_diff()
+  if not state.current_diff or not state.current_diff.item then return end
+  local cd = state.current_diff.item
+  -- Exact match: same path and section
+  for _, sec in ipairs(state.sections) do
+    for _, item in ipairs(sec.items) do
+      if item.path == cd.path and item.section == cd.section then
+        state.current_diff = { item = item }
+        return
+      end
+    end
+  end
+  -- Fallback: item may have moved sections (e.g., staged after staging)
+  for _, sec in ipairs(state.sections) do
+    for _, item in ipairs(sec.items) do
+      if item.path == cd.path then
+        state.current_diff = { item = item }
+        return
+      end
+    end
+  end
+  -- Item no longer exists — clear
+  state.current_diff = nil
+end
+
 -- Fetch git status + numstat in parallel, then render the panel.
 -- Called on open and on refresh.
 -- Uses generation counter to discard stale callbacks.
@@ -68,6 +95,7 @@ function M.load_and_render()
       { key = "changes",   label = "Changes",         items = files.changes },
       { key = "staged",    label = "Staged Changes",  items = files.staged },
     }
+    reconcile_current_diff()
     panel.render()
   end
 
@@ -187,6 +215,8 @@ function M.open()
   if layout.focus() then return end
 
   local cwd = vim.fn.getcwd()
+  -- Bug #12: remember which tab we came from for gf navigation
+  local origin_tab = vim.api.nvim_get_current_tabpage()
 
   -- get_root fails for non-git dirs, so no separate is_git_repo check needed
   git.get_root(cwd, function(ok, root)
@@ -198,6 +228,7 @@ function M.open()
 
       state.reset()
       state.git_root = root
+      state.origin_tab = origin_tab
 
       git.has_commits(root, function(has)
         vim.schedule(function()
@@ -228,6 +259,7 @@ end
 
 function M.close()
   teardown_autocmds()
+  diff.cleanup_all_keymaps()
   layout.close()
   state.reset()
 end
@@ -236,8 +268,18 @@ end
 
 function M.refresh()
   if not state.is_active() then return end
-  -- Clear buf cache so git show buffers are re-fetched
-  state.buf_cache = {}
+  -- Bug #18: Preserve cache entries for currently displayed buffers,
+  -- clear the rest so git show content is re-fetched on next diff open.
+  local preserved = {}
+  for key, buf in pairs(state.buf_cache) do
+    for _, db in ipairs(state.diff_bufs) do
+      if buf == db then
+        preserved[key] = buf
+        break
+      end
+    end
+  end
+  state.buf_cache = preserved
   M.load_and_render()
 end
 

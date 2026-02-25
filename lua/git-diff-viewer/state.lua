@@ -19,6 +19,11 @@ end
 
 -- Reset to empty/initial state.
 function M.reset()
+  -- Bug #15: Delete old panel buffer to prevent E95 name collision on reopen
+  if M.panel_buf and vim.api.nvim_buf_is_valid(M.panel_buf) then
+    pcall(vim.api.nvim_buf_delete, M.panel_buf, { force = true })
+  end
+
   -- Git root directory for the current session
   M.git_root = nil
 
@@ -47,17 +52,22 @@ function M.reset()
   M.current_diff = nil
 
   -- Tab and window handles for the viewer tab
-  M.tab = nil        -- tabpage handle
-  M.main_win = nil   -- main diff area window (right of panel)
-  M.panel_win = nil  -- left panel window
-  M.panel_buf = nil  -- left panel buffer
-  M.diff_wins = {}   -- list of diff window handles (1 or 2)
-  M.diff_bufs = {}   -- list of diff buffer handles
+  M.tab = nil         -- tabpage handle
+  M.origin_tab = nil  -- tab we came from (for gf navigation)
+  M.main_win = nil    -- main diff area window (right of panel)
+  M.panel_win = nil   -- left panel window
+  M.panel_buf = nil   -- left panel buffer
+  M.diff_wins = {}    -- list of diff window handles (1 or 2)
+  M.diff_bufs = {}    -- list of diff buffer handles
 
   -- Cache of loaded git show buffers to avoid re-fetching.
   -- Key: "HEAD:src/app.ts" or ":0:src/app.ts"
   -- Value: buffer handle (number)
   M.buf_cache = {}
+
+  -- Buffers that have diff keymaps applied (for cleanup on close).
+  -- Key: buffer handle, Value: true
+  M.keymap_bufs = {}
 
   -- File watcher handles for .git/index and .git/HEAD
   M.watchers = {}

@@ -68,7 +68,7 @@ function M.path_to_ft(path)
     local basename = path:match("[^/]+$") or path
     return EXT_FT_MAP[basename:lower()] or ""
   end
-  return EXT_FT_MAP[ext:lower()] or ext:lower()
+  return EXT_FT_MAP[ext:lower()] or ""
 end
 
 -- Show a Neovim notification. Must be called from the main thread.

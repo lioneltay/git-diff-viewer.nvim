@@ -77,10 +77,9 @@ describe("utils", function()
     end)
 
     -- Bug #26: unknown extensions should return empty string, not raw extension
-    it("returns raw extension for unknown types (current behavior)", function()
-      -- This will be changed in bug fix phase to return ""
+    it("returns empty string for unknown extensions", function()
       local result = utils.path_to_ft("file.xyz")
-      assert.equals("xyz", result)
+      assert.equals("", result)
     end)
 
     it("handles deeply nested paths", function()

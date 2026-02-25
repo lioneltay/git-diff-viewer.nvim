@@ -60,6 +60,19 @@ local function add_to_section(section_key, item)
   if sec then table.insert(sec.items, item) end
 end
 
+-- Collect items matching a folder path from a section.
+local function collect_folder_items(section_key, folder_path)
+  local sec = get_section(section_key)
+  if not sec then return {} end
+  local items = {}
+  for _, item in ipairs(sec.items) do
+    if vim.startswith(item.path, folder_path .. "/") or item.path == folder_path then
+      table.insert(items, item)
+    end
+  end
+  return items
+end
+
 -- ─── Stage ────────────────────────────────────────────────────────────────────
 
 function M.stage_item(line)
@@ -85,28 +98,23 @@ function M.stage_item(line)
     end
 
   elseif line.type == "folder" then
+    -- Bug #7 fix: collect items BEFORE removing, then move them to staged
+    local changes_items = collect_folder_items("changes", line.path)
+    local conflicts_items = collect_folder_items("conflicts", line.path)
+    local all_items = {}
+    for _, item in ipairs(changes_items) do table.insert(all_items, item) end
+    for _, item in ipairs(conflicts_items) do table.insert(all_items, item) end
+    if #all_items == 0 then return end
+
     local paths = {}
-    local changes_sec = get_section("changes")
-    local conflicts_sec = get_section("conflicts")
-    if changes_sec then
-      for _, item in ipairs(changes_sec.items) do
-        if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-          table.insert(paths, item.path)
-        end
-      end
+    for _, item in ipairs(all_items) do
+      table.insert(paths, item.path)
     end
-    if conflicts_sec then
-      for _, item in ipairs(conflicts_sec.items) do
-        if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-          table.insert(paths, item.path)
-        end
-      end
-    end
-    if #paths == 0 then return end
 
     fire_git(function()
-      for _, p in ipairs(paths) do
-        remove_from_section(p, nil)
+      for _, item in ipairs(all_items) do
+        remove_from_section(item.path, nil)
+        add_to_section("staged", vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
       end
     end, function(cb)
       git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
@@ -151,31 +159,58 @@ function M.unstage_item(line)
 
     local paths = { item.path }
 
+    -- Bug #16 fix: A_ files become untracked (??) when unstaged, not "unstaged"
+    local new_status
+    local new_xy
+    if item.status == "both" then
+      new_status = "both"
+      new_xy = item.xy
+    elseif item.xy and item.xy:sub(1, 1) == "A" then
+      new_status = "untracked"
+      new_xy = "??"
+    else
+      new_status = "unstaged"
+      new_xy = item.xy
+    end
+
     fire_git(function()
       remove_from_section(item.path, "staged")
-      local new_status = item.status == "both" and "both" or "unstaged"
-      add_to_section("changes", vim.tbl_extend("force", item, { section = "changes", status = new_status }))
+      add_to_section("changes", vim.tbl_extend("force", item, {
+        section = "changes",
+        status = new_status,
+        xy = new_xy or item.xy,
+      }))
     end, function(cb)
-      git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      -- Bug #17 fix: empty repo can't use `git restore --staged`, use `git rm --cached`
+      if not state.has_commits then
+        git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      else
+        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end
     end)
 
   elseif line.type == "folder" then
-    local staged_sec = get_section("staged")
-    if not staged_sec then return end
+    -- Bug #6 fix: collect items BEFORE removing, then move them to changes
+    local staged_items = collect_folder_items("staged", line.path)
+    if #staged_items == 0 then return end
+
     local paths = {}
-    for _, item in ipairs(staged_sec.items) do
-      if vim.startswith(item.path, line.path .. "/") or item.path == line.path then
-        table.insert(paths, item.path)
-      end
+    for _, item in ipairs(staged_items) do
+      table.insert(paths, item.path)
     end
-    if #paths == 0 then return end
 
     fire_git(function()
-      for _, p in ipairs(paths) do
-        remove_from_section(p, "staged")
+      for _, item in ipairs(staged_items) do
+        remove_from_section(item.path, "staged")
+        local new_status = item.status == "both" and "both" or "unstaged"
+        add_to_section("changes", vim.tbl_extend("force", item, { section = "changes", status = new_status }))
       end
     end, function(cb)
-      git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      if not state.has_commits then
+        git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      else
+        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end
     end)
 
   elseif line.type == "section_header" then
@@ -198,7 +233,11 @@ function M.unstage_item(line)
         end
         staged_sec.items = {}
       end, function(cb)
-        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        if not state.has_commits then
+          git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        else
+          git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        end
       end)
     end
   end
@@ -226,17 +265,14 @@ function M.discard_item(line)
       return
     end
 
+    -- Bug #4 fix: staged discard uses atomic `git checkout HEAD --` instead of
+    -- two-step unstage + discard (which can leave inconsistent state if discard fails)
     if item.section == "staged" then
       local paths = { item.path }
       fire_git(function()
         remove_from_section(item.path, "staged")
       end, function(cb)
-        git.unstage(state.git_root, paths, function(ok, stderr)
-          if not ok then cb(ok, stderr); return end
-          git.discard(state.git_root, paths, function(ok2, stderr2)
-            cb(ok2, stderr2)
-          end)
-        end)
+        git.checkout_head(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
       end)
       return
     end
@@ -263,12 +299,18 @@ function M.discard_item(line)
     end
     if #paths == 0 then return end
 
-    fire_git(function()
-      for _, p in ipairs(paths) do
-        remove_from_section(p, "changes")
-      end
-    end, function(cb)
-      git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+    -- Bug #27 fix: prompt for confirmation before folder-level discard
+    vim.ui.select({ "Yes", "No" }, {
+      prompt = "Discard changes in folder '" .. line.path .. "/' (" .. #paths .. " files)?",
+    }, function(choice)
+      if choice ~= "Yes" then return end
+      fire_git(function()
+        for _, p in ipairs(paths) do
+          remove_from_section(p, "changes")
+        end
+      end, function(cb)
+        git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      end)
     end)
   end
 end
@@ -318,7 +360,11 @@ function M.unstage_all()
       staged_sec.items = {}
     end
   end, function(cb)
-    git.unstage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+    if not state.has_commits then
+      git.rm_cached(state.git_root, { "." }, function(ok, stderr) cb(ok, stderr) end)
+    else
+      git.unstage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+    end
   end)
 end
 

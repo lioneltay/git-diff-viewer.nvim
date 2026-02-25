@@ -158,6 +158,9 @@ function M.open()
     group = aug,
     callback = function()
       vim.schedule(function()
+        -- Bug #24: guard against race where tree_buf is wiped between schedule and execution
+        if not vim.api.nvim_buf_is_valid(tree_buf) then return end
+        if not vim.api.nvim_buf_is_valid(input_buf) then return end
         render_tree(get_filter())
       end)
     end,
