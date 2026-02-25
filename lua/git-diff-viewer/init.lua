@@ -124,6 +124,39 @@ function M.open()
                 end,
               })
 
+              -- Auto-refresh when files are saved or Neovim regains focus
+              local refresh_timer = nil
+              local function debounced_refresh()
+                if not state.git_root then return end
+                if refresh_timer then
+                  refresh_timer:stop()
+                end
+                refresh_timer = vim.defer_fn(function()
+                  refresh_timer = nil
+                  if state.git_root then
+                    M.load_and_render()
+                  end
+                end, 200)
+              end
+
+              vim.api.nvim_create_autocmd("BufWritePost", {
+                callback = function(ev)
+                  if not state.tab then return true end
+                  -- Only refresh for files within the git root
+                  local file = ev.file or ""
+                  if file ~= "" and vim.startswith(file, state.git_root) then
+                    debounced_refresh()
+                  end
+                end,
+              })
+
+              vim.api.nvim_create_autocmd("FocusGained", {
+                callback = function()
+                  if not state.tab then return true end
+                  debounced_refresh()
+                end,
+              })
+
               -- Load git data and render panel
               M.load_and_render()
             end)
