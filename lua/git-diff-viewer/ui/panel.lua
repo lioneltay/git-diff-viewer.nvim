@@ -23,10 +23,58 @@ local function file_icon(filename)
   return nil, nil
 end
 
+-- ─── Tree building and compaction ─────────────────────────────────────────────
+
+-- Build a tree from a flat list of file items.
+-- Returns root node: { display_name, full_path, children = {name → node}, files = [items], child_order = [names] }
+local function build_tree(items)
+  local root = { display_name = "", full_path = "", children = {}, files = {}, child_order = {} }
+  for _, item in ipairs(items) do
+    local parts = utils.split_path(item.path)
+    local node = root
+    for _, dir in ipairs(parts.dirs) do
+      if not node.children[dir] then
+        local child_path = node.full_path == "" and dir or (node.full_path .. "/" .. dir)
+        node.children[dir] = {
+          display_name = dir,
+          full_path = child_path,
+          children = {},
+          files = {},
+          child_order = {},
+        }
+        table.insert(node.child_order, dir)
+      end
+      node = node.children[dir]
+    end
+    table.insert(node.files, item)
+  end
+  return root
+end
+
+-- Compact single-child folder chains.
+-- If a folder has exactly 1 child folder and 0 files, merge into "parent/child/".
+local function compact_tree(node)
+  -- First compact children recursively
+  for _, name in ipairs(node.child_order) do
+    compact_tree(node.children[name])
+  end
+
+  -- Compact: if exactly 1 child folder and 0 files, merge
+  if #node.child_order == 1 and #node.files == 0 and node.full_path ~= "" then
+    local child_name = node.child_order[1]
+    local child = node.children[child_name]
+    node.display_name = node.display_name .. "/" .. child.display_name
+    node.full_path = child.full_path
+    node.children = child.children
+    node.files = child.files
+    node.child_order = child.child_order
+  end
+end
+
 -- ─── Rendering ────────────────────────────────────────────────────────────────
 
--- Build the tree structure from a flat list of file_items.
--- Groups files into folders, respecting the expand/collapse state.
+-- Build the panel lines from sections.
+-- Groups files into folders with compact single-child chains.
 --
 -- Returns three values:
 --   lines:      list of panel_line metadata (1:1 with buffer lines)
@@ -72,6 +120,150 @@ local function build_lines(sections, opts)
     add({ type = "header" }, "")
   end
 
+  -- Emit a file line with status icon, file icon, name, counts, annotations
+  local function emit_file(item, depth)
+    local parts = utils.split_path(item.path)
+    local indent = string.rep("  ", depth + 2)
+    local status_char = utils.status_icon(item.xy, item.section)
+    local name = parts.file
+
+    -- Rename: show "old_name → new_name" for the filename part
+    if item.orig_path then
+      local old_parts = utils.split_path(item.orig_path)
+      name = old_parts.file .. " → " .. name
+    end
+
+    -- Build the line piece by piece, tracking column positions
+    local col = 0
+    local line_parts = {}
+
+    -- Indent
+    table.insert(line_parts, indent)
+    col = col + #indent
+
+    -- Status character
+    local status_col = col
+    table.insert(line_parts, status_char)
+    col = col + #status_char
+
+    -- Gap after status
+    table.insert(line_parts, "  ")
+    col = col + 2
+
+    -- File icon (from mini.icons)
+    local icon, icon_hl = file_icon(parts.file)
+    local icon_col
+    if icon then
+      icon_col = col
+      table.insert(line_parts, icon .. " ")
+      col = col + #icon + 1
+    end
+
+    -- Filename
+    local name_col = col
+    table.insert(line_parts, name)
+    col = col + #name
+
+    -- +/- counts
+    local added_str = item.added and item.added > 0 and ("+" .. item.added) or nil
+    local removed_str = item.removed and item.removed > 0 and ("-" .. item.removed) or nil
+    local added_col, removed_col
+    if added_str or removed_str then
+      table.insert(line_parts, "  ")
+      col = col + 2
+      if added_str then
+        added_col = col
+        table.insert(line_parts, added_str)
+        col = col + #added_str
+        if removed_str then
+          table.insert(line_parts, " ")
+          col = col + 1
+        end
+      end
+      if removed_str then
+        removed_col = col
+        table.insert(line_parts, removed_str)
+        col = col + #removed_str
+      end
+    end
+
+    -- Binary / submodule annotation
+    local dim_col
+    local dim_text
+    if item.binary then
+      dim_text = "[binary]"
+    elseif item.submodule then
+      dim_text = "[submodule]"
+    end
+    if dim_text then
+      table.insert(line_parts, "  ")
+      col = col + 2
+      dim_col = col
+      table.insert(line_parts, dim_text)
+      col = col + #dim_text
+    end
+
+    local label = table.concat(line_parts)
+    local line_idx = #text
+    add({ type = "file", item = item, depth = depth }, label)
+
+    -- Apply highlights
+    hl(utils.get_status_hl(status_char), line_idx, status_col, status_col + #status_char)
+
+    if icon_col and icon_hl then
+      hl(icon_hl, line_idx, icon_col, icon_col + #icon)
+    end
+
+    local is_active = (item.path == active_path and item.section == active_section)
+    local name_hl = is_active and "GitDiffViewerFileNameActive" or "GitDiffViewerFileName"
+    hl(name_hl, line_idx, name_col, name_col + #name)
+
+    if added_col and added_str then
+      hl("GitDiffViewerInsertions", line_idx, added_col, added_col + #added_str)
+    end
+    if removed_col and removed_str then
+      hl("GitDiffViewerDeletions", line_idx, removed_col, removed_col + #removed_str)
+    end
+    if dim_col and dim_text then
+      hl("GitDiffViewerDim", line_idx, dim_col, dim_col + #dim_text)
+    end
+  end
+
+  -- Recursively render a tree node (folder children + files)
+  local function render_node(node, depth)
+    -- Render child folders (sorted by insertion order, preserved via child_order)
+    for _, child_name in ipairs(node.child_order) do
+      local child = node.children[child_name]
+      local is_expanded = force_expanded or state.folder_expanded[child.full_path] ~= false
+      local indent = string.rep("  ", depth + 1)
+      local chevron = is_expanded and "▾" or "▸"
+      local folder_display = child.display_name .. "/"
+      local folder_text = indent .. chevron .. " " .. folder_display
+
+      local line_idx = #text
+      add(
+        { type = "folder", path = child.full_path, depth = depth, expanded = is_expanded },
+        folder_text
+      )
+      -- Highlight chevron
+      local chevron_start = #indent
+      local chevron_end = chevron_start + #chevron
+      hl("GitDiffViewerFolderIcon", line_idx, chevron_start, chevron_end)
+      -- Highlight folder name (after "chevron ")
+      local name_start = chevron_end + 1
+      hl("GitDiffViewerFolderName", line_idx, name_start, name_start + #folder_display)
+
+      if is_expanded then
+        render_node(child, depth + 1)
+      end
+    end
+
+    -- Render files at this level
+    for _, item in ipairs(node.files) do
+      emit_file(item, depth)
+    end
+  end
+
   local any_content = false
 
   for _, sec in ipairs(sections) do
@@ -95,187 +287,24 @@ local function build_lines(sections, opts)
     local chevron = is_collapsed and "▸" or "▾"
     local count_str = "(" .. #filtered .. ")"
     local header_text = "  " .. chevron .. " " .. sec.label .. " " .. count_str
-    local line_idx = #text -- 0-based index for the line about to be added
+    local line_idx = #text
     add(
       { type = "section_header", label = sec.label, section = sec.key, collapsed = is_collapsed },
       header_text
     )
-    -- Chevron: cols 2 to 2+#chevron (byte length)
     hl("GitDiffViewerFolderIcon", line_idx, 2, 2 + #chevron)
-    -- Label: after "  ▾ "
     local label_start = 2 + #chevron + 1
     hl("GitDiffViewerSectionHeader", line_idx, label_start, label_start + #sec.label)
-    -- Count: after label + space
     local count_start = label_start + #sec.label + 1
     hl("GitDiffViewerSectionCount", line_idx, count_start, count_start + #count_str)
 
     -- Skip folder/file rendering if section is collapsed
     if is_collapsed then goto continue end
 
-    -- Build folder tree for this section
-    local folder_seen = {}
-
-    for _, item in ipairs(filtered) do
-      local rel = item.path
-      local parts = utils.split_path(rel)
-      local dirs = parts.dirs
-
-      -- Emit folder nodes for each directory segment (depth-first, no duplicates).
-      for d = 1, #dirs do
-        local ancestor_collapsed = false
-        for ad = 1, d - 1 do
-          local ap = utils.dirs_to_path({ unpack(dirs, 1, ad) })
-          if state.folder_expanded[ap] == false then
-            ancestor_collapsed = true
-            break
-          end
-        end
-        if ancestor_collapsed then break end
-
-        local folder_path = utils.dirs_to_path({ unpack(dirs, 1, d) })
-        if not folder_seen[folder_path] then
-          folder_seen[folder_path] = true
-          local is_expanded = force_expanded or state.folder_expanded[folder_path] ~= false
-          local indent = string.rep("  ", d + 1)
-          local chevron = is_expanded and "▾" or "▸"
-          local folder_name = dirs[d]
-          local folder_text = indent .. chevron .. " " .. folder_name .. "/"
-
-          line_idx = #text
-          add(
-            { type = "folder", path = folder_path, depth = d, expanded = is_expanded },
-            folder_text
-          )
-          -- Highlight chevron
-          local chevron_start = #indent
-          local chevron_end = chevron_start + #chevron
-          hl("GitDiffViewerFolderIcon", line_idx, chevron_start, chevron_end)
-          -- Highlight folder name (after "chevron ")
-          local name_start = chevron_end + 1
-          hl("GitDiffViewerFolderName", line_idx, name_start, name_start + #folder_name + 1) -- +1 for "/"
-        end
-      end
-
-      -- Check if this file should be visible (all parent folders expanded)
-      local visible = true
-      if not force_expanded then
-        for d = 1, #dirs do
-          local fp = utils.dirs_to_path({ unpack(dirs, 1, d) })
-          if state.folder_expanded[fp] == false then
-            visible = false
-            break
-          end
-        end
-      end
-
-      if visible then
-        local depth = #dirs
-        local indent = string.rep("  ", depth + 2)
-        local status_char = utils.status_icon(item.xy, item.section)
-        local name = parts.file
-
-        -- Rename: show "old_name → new_name" for the filename part
-        if item.orig_path then
-          local old_parts = utils.split_path(item.orig_path)
-          name = old_parts.file .. " → " .. name
-        end
-
-        -- Build the line piece by piece, tracking column positions
-        local col = 0
-        local line_parts = {}
-
-        -- Indent
-        table.insert(line_parts, indent)
-        col = col + #indent
-
-        -- Status character
-        local status_col = col
-        table.insert(line_parts, status_char)
-        col = col + #status_char
-
-        -- Gap after status
-        table.insert(line_parts, "  ")
-        col = col + 2
-
-        -- File icon (from mini.icons)
-        local icon, icon_hl = file_icon(parts.file)
-        local icon_col
-        if icon then
-          icon_col = col
-          table.insert(line_parts, icon .. " ")
-          col = col + #icon + 1
-        end
-
-        -- Filename
-        local name_col = col
-        table.insert(line_parts, name)
-        col = col + #name
-
-        -- +/- counts
-        local added_str = item.added and item.added > 0 and ("+" .. item.added) or nil
-        local removed_str = item.removed and item.removed > 0 and ("-" .. item.removed) or nil
-        local added_col, removed_col
-        if added_str or removed_str then
-          table.insert(line_parts, "  ")
-          col = col + 2
-          if added_str then
-            added_col = col
-            table.insert(line_parts, added_str)
-            col = col + #added_str
-            if removed_str then
-              table.insert(line_parts, " ")
-              col = col + 1
-            end
-          end
-          if removed_str then
-            removed_col = col
-            table.insert(line_parts, removed_str)
-            col = col + #removed_str
-          end
-        end
-
-        -- Binary / submodule annotation
-        local dim_col
-        local dim_text
-        if item.binary then
-          dim_text = "[binary]"
-        elseif item.submodule then
-          dim_text = "[submodule]"
-        end
-        if dim_text then
-          table.insert(line_parts, "  ")
-          col = col + 2
-          dim_col = col
-          table.insert(line_parts, dim_text)
-          col = col + #dim_text
-        end
-
-        local label = table.concat(line_parts)
-        line_idx = #text
-        add({ type = "file", item = item, depth = depth }, label)
-
-        -- Apply highlights
-        hl(utils.get_status_hl(status_char), line_idx, status_col, status_col + #status_char)
-
-        if icon_col and icon_hl then
-          hl(icon_hl, line_idx, icon_col, icon_col + #icon)
-        end
-
-        local is_active = (item.path == active_path and item.section == active_section)
-        local name_hl = is_active and "GitDiffViewerFileNameActive" or "GitDiffViewerFileName"
-        hl(name_hl, line_idx, name_col, name_col + #name)
-
-        if added_col and added_str then
-          hl("GitDiffViewerInsertions", line_idx, added_col, added_col + #added_str)
-        end
-        if removed_col and removed_str then
-          hl("GitDiffViewerDeletions", line_idx, removed_col, removed_col + #removed_str)
-        end
-        if dim_col and dim_text then
-          hl("GitDiffViewerDim", line_idx, dim_col, dim_col + #dim_text)
-        end
-      end
-    end
+    -- Build tree → compact → render
+    local tree = build_tree(filtered)
+    compact_tree(tree)
+    render_node(tree, 0)
 
     ::continue::
   end
