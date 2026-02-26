@@ -330,11 +330,13 @@ function M.render()
   -- Save cursor position and the file under cursor (before rebuild)
   local cursor_line = 1
   local cursor_item_path = nil
+  local cursor_item_section = nil
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     cursor_line = vim.api.nvim_win_get_cursor(state.panel_win)[1]
     local old_line = state.panel_lines[cursor_line]
     if old_line and old_line.type == "file" and old_line.item then
       cursor_item_path = old_line.item.path
+      cursor_item_section = old_line.item.section
     end
   end
 
@@ -361,9 +363,11 @@ function M.render()
     local follow_path = cursor_item_path
 
     if follow_path then
-      -- Find the file the cursor was on (may have moved sections after stage/unstage)
+      -- Find the file the cursor was on, matching both path and section.
+      -- This prevents the cursor from following a file when it moves between
+      -- sections (e.g. staging moves a file from "changes" to "staged").
       for i, line in ipairs(lines) do
-        if line.type == "file" and line.item.path == follow_path then
+        if line.type == "file" and line.item.path == follow_path and line.item.section == cursor_item_section then
           target_line = i
           break
         end
