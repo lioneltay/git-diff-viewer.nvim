@@ -32,10 +32,8 @@ local function set_panel_win_opts(win)
   vim.wo[win].winhl = "Normal:Normal,EndOfBuffer:Normal,NormalNC:Normal"
 end
 
--- Apply visual options to a diff window to override user's global settings.
+-- Apply visual options to a diff window.
 local function set_diff_win_opts(win)
-  vim.api.nvim_set_option_value("number", false, { win = win })
-  vim.api.nvim_set_option_value("relativenumber", false, { win = win })
   vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
   vim.api.nvim_set_option_value("cursorline", false, { win = win })
   vim.api.nvim_set_option_value("foldcolumn", "0", { win = win })
