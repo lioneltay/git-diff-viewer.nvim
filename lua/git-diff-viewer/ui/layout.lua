@@ -20,14 +20,36 @@ function M.focus()
   return false
 end
 
+-- Apply visual options to the panel window.
+local function set_panel_win_opts(win)
+  vim.api.nvim_set_option_value("cursorline", true, { win = win })
+  vim.api.nvim_set_option_value("number", false, { win = win })
+  vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+  vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
+  vim.api.nvim_set_option_value("wrap", false, { win = win })
+  vim.api.nvim_set_option_value("winfixwidth", true, { win = win })
+  vim.api.nvim_set_option_value("foldcolumn", "0", { win = win })
+  vim.wo[win].winhl = "Normal:Normal,EndOfBuffer:Normal,NormalNC:Normal"
+end
+
+-- Apply visual options to a diff window to override user's global settings.
+local function set_diff_win_opts(win)
+  vim.api.nvim_set_option_value("number", false, { win = win })
+  vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+  vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
+  vim.api.nvim_set_option_value("cursorline", false, { win = win })
+  vim.api.nvim_set_option_value("foldcolumn", "0", { win = win })
+end
+
 -- Create the viewer tab and its two main windows.
 -- Returns { panel_win, main_win } window handles.
 --
 -- Layout: [panel (left, fixed width)] | [main area (right, fills rest)]
 -- The main area is where diff panes are opened.
 function M.create_tab()
-  -- Open a new tab with an empty scratch buffer in the main area
-  vim.cmd("tabnew")
+  -- Open a new tab with an empty scratch buffer in the main area.
+  -- noautocmd prevents external plugins (e.g. auto-reload) from capturing temp buffers.
+  vim.cmd("noautocmd tabnew")
   state.tab = vim.api.nvim_get_current_tabpage()
 
   -- The new tab starts with one window; this becomes the main diff area
@@ -38,10 +60,10 @@ function M.create_tab()
   local initial_buf = vim.api.nvim_get_current_buf()
   vim.bo[initial_buf].buflisted = false
   vim.bo[initial_buf].buftype = "nofile"
-  vim.bo[initial_buf].bufhidden = "wipe"
+  vim.bo[initial_buf].bufhidden = "hide"
 
   -- Create the panel as a left vertical split
-  vim.cmd("topleft vsplit")
+  vim.cmd("noautocmd topleft vsplit")
   local panel_win = vim.api.nvim_get_current_win()
 
   vim.api.nvim_win_set_width(panel_win, config.options.panel_width)
@@ -54,25 +76,19 @@ function M.create_tab()
   state.diff_wins = {}
   state.diff_bufs = {}
 
-  return { panel_win = panel_win, main_win = main_win }
-end
+  -- Apply clean window options to the main diff area
+  set_diff_win_opts(main_win)
 
--- Apply visual options to the panel window.
-local function set_panel_win_opts(win)
-  vim.api.nvim_set_option_value("cursorline", true, { win = win })
-  vim.api.nvim_set_option_value("number", false, { win = win })
-  vim.api.nvim_set_option_value("relativenumber", false, { win = win })
-  vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
-  vim.api.nvim_set_option_value("wrap", false, { win = win })
-  vim.api.nvim_set_option_value("winfixwidth", true, { win = win })
-  vim.wo[win].winhl = "Normal:Normal,EndOfBuffer:Normal"
+  return { panel_win = panel_win, main_win = main_win }
 end
 
 -- Attach the panel buffer to the panel window.
 function M.set_panel_buf(buf)
   state.panel_buf = buf
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-    vim.api.nvim_win_set_buf(state.panel_win, buf)
+    vim.api.nvim_win_call(state.panel_win, function()
+      vim.cmd("noautocmd buffer " .. buf)
+    end)
     vim.api.nvim_win_set_width(state.panel_win, config.options.panel_width)
     set_panel_win_opts(state.panel_win)
   end
@@ -133,7 +149,7 @@ function M.open_diff_wins(count)
       local w1 = state.diff_wins[1]
       if w1 and vim.api.nvim_win_is_valid(w1) then
         vim.api.nvim_set_current_win(w1)
-        vim.cmd("vsplit")
+        vim.cmd("noautocmd vsplit")
         local w2 = vim.api.nvim_get_current_win()
         vim.api.nvim_set_current_win(w1)
         state.diff_wins = { w1, w2 }
@@ -158,7 +174,7 @@ function M.open_diff_wins(count)
       vim.api.nvim_set_current_win(current_win)
     elseif state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
       vim.api.nvim_set_current_win(state.panel_win)
-      vim.cmd("vsplit")
+      vim.cmd("noautocmd vsplit")
       current_win = vim.api.nvim_get_current_win()
       state.main_win = current_win
     else
@@ -168,7 +184,7 @@ function M.open_diff_wins(count)
     local w = { current_win }
 
     if count == 2 then
-      vim.cmd("vsplit")
+      vim.cmd("noautocmd vsplit")
       table.insert(w, vim.api.nvim_get_current_win())
       vim.api.nvim_set_current_win(w[1])
     end
@@ -184,6 +200,14 @@ function M.open_diff_wins(count)
   vim.o.equalalways = ea
 
   if not ok then error(wins) end
+
+  -- Apply diff-specific window options to override user's global settings
+  for _, w in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(w) then
+      set_diff_win_opts(w)
+    end
+  end
+
   return wins
 end
 

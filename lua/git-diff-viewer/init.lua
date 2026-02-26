@@ -158,8 +158,9 @@ end
 
 -- ─── Autocmd lifecycle ──────────────────────────────────────────────────────
 
--- Forward declaration
+-- Forward declarations
 local teardown_autocmds
+local teardown_watchers
 
 -- Debounced refresh timer — shared across autocmds
 local refresh_timer = nil
@@ -190,7 +191,92 @@ local function setup_autocmds()
         -- Our tab was the one closed
         teardown_autocmds()
         teardown_watchers()
+        diff.restore_bufhidden()
         state.reset()
+      end
+    end,
+  })
+
+  -- Fix: floating windows (noice.nvim cmdline, which-key popup, snacks
+  -- backdrop) inherit diff=true from the diff window that had focus when
+  -- they open. This causes Neovim's diff engine to include the floating
+  -- window as a participant, corrupting filler lines and highlights.
+  -- See: https://github.com/folke/noice.nvim/issues/1169
+  --
+  -- Strategy: intercept nvim_open_win to strip diff from new floating
+  -- windows immediately at creation time — before the diff engine
+  -- recalculates. This catches all plugins regardless of whether they
+  -- suppress autocmds. CmdlineEnter/Leave and WinEnter act as fallbacks.
+
+  local function restore_diff_wins()
+    local dw = state.diff_wins or {}
+    if #dw < 2 then return end
+    for _, w in ipairs(dw) do
+      if vim.api.nvim_win_is_valid(w) then
+        vim.api.nvim_set_option_value("diff", true, { win = w })
+        vim.api.nvim_set_option_value("scrollbind", true, { win = w })
+        vim.api.nvim_set_option_value("cursorbind", true, { win = w })
+        vim.api.nvim_set_option_value("foldmethod", "diff", { win = w })
+        vim.api.nvim_set_option_value("foldlevel", 999, { win = w })
+      end
+    end
+    vim.cmd("diffupdate")
+  end
+
+  -- Intercept nvim_open_win: strip diff from any floating window that
+  -- inherits it from our diff panes. This runs at window creation time,
+  -- before the diff engine sees the new participant.
+  local orig_open_win = vim.api.nvim_open_win
+  vim.api.nvim_open_win = function(buf, enter, config, ...)
+    local win = orig_open_win(buf, enter, config, ...)
+    if state.is_active() and config and config.relative and config.relative ~= "" then
+      if vim.api.nvim_win_is_valid(win) and vim.wo[win].diff then
+        vim.wo[win].diff = false
+      end
+    end
+    return win
+  end
+
+  -- Restore the original nvim_open_win on teardown
+  state._orig_open_win = orig_open_win
+
+  -- Suspend diff before cmdline mode (noice.nvim may bypass our hook).
+  vim.api.nvim_create_autocmd("CmdlineEnter", {
+    group = augroup,
+    callback = function()
+      if not state.is_active() then return end
+      local dw = state.diff_wins or {}
+      if #dw < 2 then return end
+      for _, w in ipairs(dw) do
+        if vim.api.nvim_win_is_valid(w) then
+          vim.wo[w].diff = false
+        end
+      end
+    end,
+  })
+
+  -- Restore diff when cmdline mode closes.
+  vim.api.nvim_create_autocmd("CmdlineLeave", {
+    group = augroup,
+    callback = function()
+      if not state.is_active() then return end
+      vim.schedule(restore_diff_wins)
+    end,
+  })
+
+  -- WinEnter fallback: restore diff if any window lost it.
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = augroup,
+    callback = function()
+      if not state.is_active() then return end
+      if vim.api.nvim_get_current_tabpage() ~= state.tab then return end
+      local dw = state.diff_wins or {}
+      if #dw < 2 then return end
+      for _, w in ipairs(dw) do
+        if vim.api.nvim_win_is_valid(w) and not vim.wo[w].diff then
+          restore_diff_wins()
+          return
+        end
       end
     end,
   })
@@ -225,12 +311,17 @@ teardown_autocmds = function()
     refresh_timer:stop()
     refresh_timer = nil
   end
+  -- Restore original nvim_open_win if we intercepted it
+  if state._orig_open_win then
+    vim.api.nvim_open_win = state._orig_open_win
+    state._orig_open_win = nil
+  end
 end
 
 -- ─── File watching ────────────────────────────────────────────────────────
 
 -- Stop and clean up all file watchers.
-local function teardown_watchers()
+teardown_watchers = function()
   for _, w in ipairs(state.watchers) do
     if not w:is_closing() then
       w:stop()
@@ -344,7 +435,13 @@ function M.close()
   teardown_autocmds()
   teardown_watchers()
   diff.cleanup_all_keymaps()
+  -- Close the tab FIRST while buffers are still pinned (bufhidden="hide").
+  -- This prevents auto-reload.nvim's debounced checktime from hitting E94
+  -- on buffers that were unloaded during tab close.
   layout.close()
+  -- Now restore original bufhidden. Buffers are already hidden, so the
+  -- restored value only takes effect next time they leave a window.
+  diff.restore_bufhidden()
   state.reset()
 end
 

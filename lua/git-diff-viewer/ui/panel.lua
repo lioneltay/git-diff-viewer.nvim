@@ -327,10 +327,15 @@ function M.render()
     return
   end
 
-  -- Save cursor position
+  -- Save cursor position and the file under cursor (before rebuild)
   local cursor_line = 1
+  local cursor_item_path = nil
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     cursor_line = vim.api.nvim_win_get_cursor(state.panel_win)[1]
+    local old_line = state.panel_lines[cursor_line]
+    if old_line and old_line.type == "file" and old_line.item then
+      cursor_item_path = old_line.item.path
+    end
   end
 
   -- Build new content
@@ -349,12 +354,46 @@ function M.render()
     vim.api.nvim_buf_add_highlight(buf, ns, h.group, h.line, h.col_start, h.col_end)
   end
 
-  -- Restore cursor (clamped to new line count)
+  -- Restore cursor: try to follow the file the user was interacting with.
+  -- Priority: 1) active diff item, 2) file under cursor before rebuild, 3) old line number
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
-    local line_count = vim.api.nvim_buf_line_count(buf)
-    cursor_line = math.min(cursor_line, line_count)
-    cursor_line = math.max(cursor_line, 1)
-    vim.api.nvim_win_set_cursor(state.panel_win, { cursor_line, 0 })
+    local target_line = nil
+
+    -- Determine the path to follow: prefer active diff, fall back to cursor item
+    local follow_path = cursor_item_path
+    local follow_section = nil
+    if state.current_diff and state.current_diff.item then
+      follow_path = state.current_diff.item.path
+      follow_section = state.current_diff.item.section
+    end
+
+    if follow_path then
+      -- Exact match: same path and section
+      if follow_section then
+        for i, line in ipairs(lines) do
+          if line.type == "file" and line.item.path == follow_path and line.item.section == follow_section then
+            target_line = i
+            break
+          end
+        end
+      end
+      -- Fallback: path only (file may have moved sections after stage/unstage)
+      if not target_line then
+        for i, line in ipairs(lines) do
+          if line.type == "file" and line.item.path == follow_path then
+            target_line = i
+            break
+          end
+        end
+      end
+    end
+
+    if not target_line then
+      local line_count = vim.api.nvim_buf_line_count(buf)
+      target_line = math.min(cursor_line, line_count)
+      target_line = math.max(target_line, 1)
+    end
+    vim.api.nvim_win_set_cursor(state.panel_win, { target_line, 0 })
   end
 end
 
@@ -514,6 +553,8 @@ function M.create_buf()
       "  q          close diff",
       "  gf         open file in previous tab",
       "  <C-h>      focus panel",
+      "  <leader>ff fuzzy find changed files",
+      "  <leader>fb browse viewed diffs",
       "",
       "  Press q or <Esc> to close",
     }

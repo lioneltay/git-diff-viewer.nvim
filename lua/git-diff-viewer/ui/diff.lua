@@ -22,6 +22,54 @@ local config = require("git-diff-viewer.config")
 
 local M = {}
 
+-- Set buffer in a window using the standard API.
+-- We allow autocmds to fire so that:
+--   1. Neovim's diff algorithm properly registers buffer changes
+--   2. Plugins like auto-reload.nvim receive BufUnload for old buffers
+--      (preventing E94 from stale watchers on unloaded buffers)
+-- Our scratch buffers have buftype="nofile" so auto-reload skips them.
+local function set_win_buf(win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
+end
+
+-- Load a real file buffer for diff display.
+-- Suppresses BufReadPost for NEW buffers to prevent auto-reload.nvim from
+-- watching files loaded by our plugin (avoids E94 from stale checktime timers).
+-- Already-loaded buffers are a no-op — they keep their existing watchers.
+local function load_for_diff(buf)
+  if vim.api.nvim_buf_is_loaded(buf) then return end
+  local ei = vim.o.eventignore
+  vim.o.eventignore = (ei == "" and "BufReadPost" or (ei .. ",BufReadPost"))
+  vim.fn.bufload(buf)
+  vim.o.eventignore = ei
+  -- Manually detect filetype since BufReadPost was suppressed
+  if vim.bo[buf].filetype == "" then
+    local ft = vim.filetype.match({ buf = buf })
+    if ft then vim.bo[buf].filetype = ft end
+  end
+end
+
+-- Ensure a real file buffer stays loaded when hidden from diff windows.
+-- Prevents race conditions with auto-reload.nvim's debounced checktime
+-- (the timer may fire after BufUnload unwatches the file).
+-- Saves original bufhidden so it can be restored when the viewer closes.
+local function pin_buffer(buf)
+  if vim.bo[buf].buftype ~= "" then return end -- only pin real file buffers
+  if state.bufhidden_overrides[buf] ~= nil then return end -- already pinned
+  state.bufhidden_overrides[buf] = vim.bo[buf].bufhidden
+  vim.bo[buf].bufhidden = "hide"
+end
+
+-- Restore original bufhidden on all pinned buffers. Called on viewer close.
+function M.restore_bufhidden()
+  for buf, original in pairs(state.bufhidden_overrides) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(function() vim.bo[buf].bufhidden = original end)
+    end
+  end
+  state.bufhidden_overrides = {}
+end
+
 -- ─── Scratch buffer helpers ───────────────────────────────────────────────────
 
 -- Get or create a cached scratch buffer for a git show key.
@@ -70,7 +118,7 @@ end
 local function message_buf(msg)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { msg })
   vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
   return buf
@@ -150,6 +198,11 @@ local function setup_diff_keymaps(buf)
     require("git-diff-viewer.ui.viewed").open()
   end, "Browse viewed diffs")
 
+  -- File finder (same as panel keymap)
+  map("<leader>ff", function()
+    require("git-diff-viewer.ui.finder").open()
+  end, "Find changed files")
+
   -- Track for cleanup (Bug #11: keymaps on real file buffers must be removed on close)
   state.keymap_bufs[buf] = true
 end
@@ -162,6 +215,7 @@ local function cleanup_diff_keymaps(buf)
   pcall(vim.keymap.del, "n", dk.open_file, { buffer = buf })
   pcall(vim.keymap.del, "n", dk.focus_panel, { buffer = buf })
   pcall(vim.keymap.del, "n", "<leader>fb", { buffer = buf })
+  pcall(vim.keymap.del, "n", "<leader>ff", { buffer = buf })
 end
 
 -- Remove diff keymaps from all tracked buffers. Called on viewer close.
@@ -183,11 +237,32 @@ end
 
 -- ─── Single-pane display ──────────────────────────────────────────────────────
 
--- Restore focus to the panel window.
+-- Restore focus to the panel window and update panel to reflect active diff.
 local function refocus_panel()
+  local panel = require("git-diff-viewer.ui.panel")
+  -- Re-render panel to update the active file highlight
+  panel.render()
+  -- Sync panel cursor to the active file
+  if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) and state.current_diff and state.current_diff.item then
+    local target = state.current_diff.item
+    for i, line in ipairs(state.panel_lines) do
+      if line.type == "file" and line.item.path == target.path and line.item.section == target.section then
+        vim.api.nvim_win_set_cursor(state.panel_win, { i, 0 })
+        break
+      end
+    end
+  end
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     vim.api.nvim_set_current_win(state.panel_win)
   end
+end
+
+-- Disable diff mode and clear related options from a window.
+local function disable_diff_mode(win)
+  vim.api.nvim_set_option_value("diff", false, { win = win })
+  vim.api.nvim_set_option_value("scrollbind", false, { win = win })
+  vim.api.nvim_set_option_value("cursorbind", false, { win = win })
+  vim.api.nvim_set_option_value("foldmethod", "manual", { win = win })
 end
 
 -- Display a single buffer in one diff window (no diff mode).
@@ -196,8 +271,11 @@ local function show_single(buf)
   local wins = layout.open_diff_wins(1)
   local win = wins[1]
 
-  vim.api.nvim_win_set_buf(win, buf)
+  set_win_buf(win, buf)
   state.diff_bufs = { buf }
+
+  -- Clear any lingering diff mode settings from previous side-by-side diff
+  disable_diff_mode(win)
 
   setup_diff_keymaps(buf)
   refocus_panel()
@@ -211,12 +289,21 @@ local function show_side_by_side(left_buf, right_buf)
   local left_win = wins[1]
   local right_win = wins[2]
 
-  vim.api.nvim_win_set_buf(left_win, left_buf)
-  vim.api.nvim_win_set_buf(right_win, right_buf)
+  -- Disable diff mode before swapping buffers to prevent transient
+  -- diff computation against mismatched buffers (when windows are reused)
+  disable_diff_mode(left_win)
+  disable_diff_mode(right_win)
+
+  set_win_buf(left_win, left_buf)
+  set_win_buf(right_win, right_buf)
   state.diff_bufs = { left_buf, right_buf }
 
   enable_diff_mode(left_win)
   enable_diff_mode(right_win)
+
+  -- Force Neovim to recompute diff — required because set_win_buf uses
+  -- noautocmd which suppresses the internal events diff mode relies on.
+  vim.cmd("diffupdate")
 
   setup_diff_keymaps(left_buf)
   setup_diff_keymaps(right_buf)
@@ -270,7 +357,8 @@ function M.open(item)
   if section == "conflicts" then
     local full_path = cwd .. "/" .. path
     local working_buf = vim.fn.bufnr(full_path, true)
-    vim.fn.bufload(working_buf)
+    load_for_diff(working_buf)
+    pin_buffer(working_buf)
     show_single(working_buf)
     return
   end
@@ -280,7 +368,8 @@ function M.open(item)
   if xy == "??" then
     local full_path = cwd .. "/" .. path
     local working_buf = vim.fn.bufnr(full_path, true)
-    vim.fn.bufload(working_buf)
+    load_for_diff(working_buf)
+    pin_buffer(working_buf)
     show_single(working_buf)
     return
   end
@@ -330,7 +419,8 @@ function M.open(item)
 
     local full_path = cwd .. "/" .. path
     right_buf = vim.fn.bufnr(full_path, true)
-    vim.fn.bufload(right_buf)
+    load_for_diff(right_buf)
+    pin_buffer(right_buf)
 
     if not state.has_commits then
       set_buf_content(left_buf, { "(no base commit)" })
@@ -429,7 +519,8 @@ function M.open(item)
 
   local full_path = cwd .. "/" .. path
   right_buf = vim.fn.bufnr(full_path, true)
-  vim.fn.bufload(right_buf)
+  load_for_diff(right_buf)
+  pin_buffer(right_buf)
 
   if not state.has_commits then
     set_buf_content(left_buf, { "(no base commit)" })

@@ -75,6 +75,10 @@ function M.reset()
   -- File watcher handles for .git/index and .git/HEAD
   M.watchers = {}
 
+  -- Buffers whose bufhidden was overridden to "hide" during the session.
+  -- Key: buffer handle, Value: original bufhidden string
+  M.bufhidden_overrides = {}
+
   -- Namespace for panel highlights
   M.ns = vim.api.nvim_create_namespace("git_diff_viewer_panel")
 end

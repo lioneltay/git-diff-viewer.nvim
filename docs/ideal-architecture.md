@@ -1,5 +1,7 @@
 # git-diff-viewer.nvim — Ideal Architecture Proposal
 
+hello
+
 ## Design Goals
 
 1. **Eliminate the god module.** init.lua should be a thin orchestrator, not a 735-line catch-all.
@@ -38,19 +40,19 @@ lua/git-diff-viewer/
 
 ### What Changed
 
-| Change | Where | Purpose |
-|--------|-------|---------|
-| New `operations.lua` | Extracted from init.lua | `stage_item`, `unstage_item`, `discard_item`, `stage_all`, `unstage_all`, optimistic helpers (~200 lines) |
-| Augroup in init.lua | Replaces scattered `nvim_create_autocmd` calls | Single augroup `"GitDiffViewer"`, `clear = true` on setup and teardown. No separate module needed — the fix is the augroup, not a file. |
-| `state.sections` | Replaces `state.files` + `state.branch_files` | Unified list of `{ key, label, items }`. Panel/finder iterate directly — no `if mode == "branch"` checks. |
-| `state.main_win` | Tracked from `layout.create_tab()` | Replaces fragile `wincmd l` navigation in `open_diff_wins`. |
-| `state.is_active()` | New guard function | Replaces ad-hoc `state.tab` checks in async callbacks. |
-| Fire-and-forget optimistic | Replaces rollback-based `optimistic()` | No rollback. No queue. Each operation gets immediate feedback. Debounced refresh syncs with reality. |
-| Window reuse in `open_diff_wins` | Replaces close/recreate on every navigation | Preserves per-window jumplist (Ctrl-O/I). `win_set_buf` pushes old buffer onto jumplist automatically. |
-| Buffer survival on refresh | Replaces force-delete of cached buffers | Only clears cache map. Buffers survive with `bufhidden="hide"` for jumplist navigation. |
-| `state.viewed_diffs` + `ui/viewed.lua` | New | Tracks opened diffs by recency. `<leader>fb` picker for re-opening previously viewed files. |
-| Compact folder rendering | Replaces inline folder emission in `build_lines` | Pre-builds tree, compacts single-child chains, renders depth-first. |
-| File watchers (`vim.uv.new_fs_event`) | New | Watches `.git/index`, `.git/HEAD`, git root (recursive). Triggers debounced refresh on external changes. |
+| Change                                 | Where                                            | Purpose                                                                                                                                 |
+| -------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| New `operations.lua`                   | Extracted from init.lua                          | `stage_item`, `unstage_item`, `discard_item`, `stage_all`, `unstage_all`, optimistic helpers (~200 lines)                               |
+| Augroup in init.lua                    | Replaces scattered `nvim_create_autocmd` calls   | Single augroup `"GitDiffViewer"`, `clear = true` on setup and teardown. No separate module needed — the fix is the augroup, not a file. |
+| `state.sections`                       | Replaces `state.files` + `state.branch_files`    | Unified list of `{ key, label, items }`. Panel/finder iterate directly — no `if mode == "branch"` checks.                               |
+| `state.main_win`                       | Tracked from `layout.create_tab()`               | Replaces fragile `wincmd l` navigation in `open_diff_wins`.                                                                             |
+| `state.is_active()`                    | New guard function                               | Replaces ad-hoc `state.tab` checks in async callbacks.                                                                                  |
+| Fire-and-forget optimistic             | Replaces rollback-based `optimistic()`           | No rollback. No queue. Each operation gets immediate feedback. Debounced refresh syncs with reality.                                    |
+| Window reuse in `open_diff_wins`       | Replaces close/recreate on every navigation      | Preserves per-window jumplist (Ctrl-O/I). `win_set_buf` pushes old buffer onto jumplist automatically.                                  |
+| Buffer survival on refresh             | Replaces force-delete of cached buffers          | Only clears cache map. Buffers survive with `bufhidden="hide"` for jumplist navigation.                                                 |
+| `state.viewed_diffs` + `ui/viewed.lua` | New                                              | Tracks opened diffs by recency. `<leader>fb` picker for re-opening previously viewed files.                                             |
+| Compact folder rendering               | Replaces inline folder emission in `build_lines` | Pre-builds tree, compacts single-child chains, renders depth-first.                                                                     |
+| File watchers (`vim.uv.new_fs_event`)  | New                                              | Watches `.git/index`, `.git/HEAD`, git root (recursive). Triggers debounced refresh on external changes.                                |
 
 Navigation functions (`next_file`, `prev_file`, `all_file_items`, `open_file_item`, ~60 lines) stay in init.lua — too small for their own module, and diff.lua already deferred-requires init.lua for close/navigation keymaps.
 
@@ -61,6 +63,7 @@ init.lua shrinks from ~735 lines to ~400 lines: `setup`, `open`, `close`, `refre
 ## Key Design Changes
 
 Design changes are organized into two groups:
+
 - **1–14: Architectural fixes** — address existing bugs, structural problems, and code quality issues identified in the architecture review.
 - **15–19: New features** — add capabilities that don't exist today.
 
@@ -416,6 +419,7 @@ end
 ```
 
 **Changes from current code:**
+
 - `is_git_repo` removed — `get_root` already fails for non-git dirs, eliminating one async nesting level (3 → 2 in `open()`, 4 → 3 in `open_branch()`)
 - Shared repo detection, state reset, UI creation, and autocmd setup live in `open_viewer()`
 - Eliminates ~120 lines of duplicated setup code
@@ -749,7 +753,7 @@ end
 
 **Why:** The current two-step approach (`git restore --staged` then `git restore`) has Bug #4: if unstage succeeds but discard fails, the UI and git state diverge. `git checkout HEAD --` is atomic — it either restores both or neither.
 
-**Edge case:** `git checkout HEAD -- <path>` fails for staged new files (A_) because the file doesn't exist in HEAD. For new files, discard should use `git rm --cached <path>` to unstage, then `os.remove()` to delete from disk (same as untracked file discard). Note: this new-file path is inherently non-atomic (two operations), but it's the only correct approach since the file doesn't exist in HEAD. If `git rm --cached` succeeds but `os.remove()` fails (file locked/permissions), the file remains on disk as untracked — a safe degradation that the next refresh will show correctly.
+**Edge case:** `git checkout HEAD -- <path>` fails for staged new files (A\_) because the file doesn't exist in HEAD. For new files, discard should use `git rm --cached <path>` to unstage, then `os.remove()` to delete from disk (same as untracked file discard). Note: this new-file path is inherently non-atomic (two operations), but it's the only correct approach since the file doesn't exist in HEAD. If `git rm --cached` succeeds but `os.remove()` fails (file locked/permissions), the file remains on disk as untracked — a safe degradation that the next refresh will show correctly.
 
 ### New Features
 
@@ -937,16 +941,16 @@ Each line shows: status icon, file path (with icon if mini.icons available), sec
 
 **Keymaps:**
 
-| Key | Mode | Action |
-|-----|------|--------|
-| `<CR>` | insert/normal | Open selected file's diff |
-| `<C-d>` | insert/normal | Remove selected entry from list |
-| `<Esc>`, `q` | normal | Close picker |
-| `<C-c>` | insert | Close picker |
-| `<Down>`, `<C-j>`, `<C-n>` | insert | Move selection down |
-| `<Up>`, `<C-k>`, `<C-p>` | insert | Move selection up |
-| `j`, `k` | normal | Move selection up/down |
-| Type text | insert | Filter entries by file path |
+| Key                        | Mode          | Action                          |
+| -------------------------- | ------------- | ------------------------------- |
+| `<CR>`                     | insert/normal | Open selected file's diff       |
+| `<C-d>`                    | insert/normal | Remove selected entry from list |
+| `<Esc>`, `q`               | normal        | Close picker                    |
+| `<C-c>`                    | insert        | Close picker                    |
+| `<Down>`, `<C-j>`, `<C-n>` | insert        | Move selection down             |
+| `<Up>`, `<C-k>`, `<C-p>`   | insert        | Move selection up               |
+| `j`, `k`                   | normal        | Move selection up/down          |
+| Type text                  | insert        | Filter entries by file path     |
 
 `<C-d>` follows the telescope convention for removing a buffer from a list. It removes the entry from `state.viewed_diffs` and re-renders the list in place. The underlying scratch buffer is not deleted — it stays alive for jumplist navigation and can be re-opened by viewing the file again from the panel.
 
@@ -1081,10 +1085,10 @@ Keep diffs up to date when files are edited externally (by AI tools, other edito
 
 **What to watch:**
 
-| Target | Catches | API |
-|--------|---------|-----|
-| `.git/index` | Staging/unstaging from any tool (git CLI, lazygit, AI) | `vim.uv.new_fs_event()` |
-| `.git/HEAD` | Branch switches | `vim.uv.new_fs_event()` |
+| Target             | Catches                                                   | API                                         |
+| ------------------ | --------------------------------------------------------- | ------------------------------------------- |
+| `.git/index`       | Staging/unstaging from any tool (git CLI, lazygit, AI)    | `vim.uv.new_fs_event()`                     |
+| `.git/HEAD`        | Branch switches                                           | `vim.uv.new_fs_event()`                     |
 | Git root directory | Working tree file edits (recursive on macOS via FSEvents) | `vim.uv.new_fs_event({ recursive = true })` |
 
 **Implementation:**
@@ -1169,6 +1173,7 @@ end
 All three watchers call `schedule_refresh()` instead of `vim.schedule(...)` directly.
 
 **Linux fallback:** `recursive = true` doesn't work with inotify. Options:
+
 1. Accept that on Linux, only `.git/index` and `.git/HEAD` watching works reliably. External file edits are caught on `FocusGained` or manual `R`.
 2. Add an optional poll timer as fallback: `vim.uv.new_timer()` every 2-5 seconds calls `debounced_refresh()`. Controlled by a config option to avoid unnecessary git calls.
 
@@ -1216,6 +1221,7 @@ The `.git/index` watcher alone covers most AI-tool workflows, since many AI tool
 ### Key Differences from Current
 
 **Architectural:**
+
 1. **init.lua is thinner** (~400 lines vs ~735) — lifecycle management, navigation, autocmds, commands only.
 2. **operations.lua owns all git mutations** — stage, unstage, discard, stage_all, unstage_all. Fire-and-forget with debounced refresh.
 3. **Unified `state.sections`** — no `state.files` / `state.branch_files` split. Panel and finder iterate one list.
@@ -1224,12 +1230,7 @@ The `.git/index` watcher alone covers most AI-tool workflows, since many AI tool
 6. **Fewer deferred requires** — `panel ··> init` becomes `panel ··> operations` (more specific dependency).
 7. **Generation counter** — stale async callbacks rejected by design, not by accident.
 
-**New capabilities:**
-8. **Diff windows reused** — `open_diff_wins` reuses existing windows when pane count matches, preserving Neovim's per-window jumplist for Ctrl-O/I navigation.
-9. **Buffers survive refresh** — cached scratch buffers are not deleted on refresh, only the cache map is cleared. Buffers survive for jumplist and are reused via orphan detection.
-10. **Viewed diffs picker** (`<leader>fb`) — recency-sorted flat list of previously viewed files with search, open, and remove.
-11. **Compact folder rendering** — single-child folder chains collapsed into one line (e.g., `src/components/shared/`).
-12. **File watchers** — `.git/index`, `.git/HEAD`, and git root watched via `vim.uv.new_fs_event()` for real-time external change detection.
+**New capabilities:** 8. **Diff windows reused** — `open_diff_wins` reuses existing windows when pane count matches, preserving Neovim's per-window jumplist for Ctrl-O/I navigation. 9. **Buffers survive refresh** — cached scratch buffers are not deleted on refresh, only the cache map is cleared. Buffers survive for jumplist and are reused via orphan detection. 10. **Viewed diffs picker** (`<leader>fb`) — recency-sorted flat list of previously viewed files with search, open, and remove. 11. **Compact folder rendering** — single-child folder chains collapsed into one line (e.g., `src/components/shared/`). 12. **File watchers** — `.git/index`, `.git/HEAD`, and git root watched via `vim.uv.new_fs_event()` for real-time external change detection.
 
 ---
 
@@ -1238,26 +1239,33 @@ The `.git/index` watcher alone covers most AI-tool workflows, since many AI tool
 This refactor can be done incrementally without breaking the plugin at any step. Phases 1–7 are architectural fixes (bug fixes and structural improvements). Phases 8–11 are new features that build on the refactored architecture. The two groups form a natural checkpoint — Phases 1–7 can ship independently, with Phases 8–11 following as a second pass.
 
 ### Phase 1: Augroup + autocmd consolidation
+
 Create the `"GitDiffViewer"` augroup. Move all autocmd creation into a single `setup_autocmds()` function. Add `teardown_autocmds()` to `close()`. Add BufWritePost/FocusGained to `open_branch()` (currently missing). Test open/close cycling doesn't leak autocmds.
 
 ### Phase 2: Add generation counter + error propagation
+
 Add `state.generation`, `state.next_generation()`. Wire into `load_and_render` and `load_and_render_branch`. Check `ok` parameter in all git callbacks — show error and bail instead of rendering with empty data. Test rapid close/reopen doesn't show stale data.
 
 ### Phase 3: Unified data model
+
 Replace `state.files` + `state.branch_files` with `state.sections`. Update `load_and_render`, `load_and_render_branch`, panel.lua `build_lines`, and finder.lua to use the new structure. Update all operations that reference `state.files.changes` etc. to use the `get_section()` helper. Test both status and branch modes render correctly.
 
 ### Phase 4: Track `state.main_win` + add `state.is_active()`
+
 Store `main_win` from `create_tab()`. Replace `wincmd l` in `open_diff_wins` with direct window handle. Add `state.is_active()` guard and use it in autocmd callbacks and async completions. Test diff window creation works correctly, including after the main window is accidentally closed.
 
 ### Phase 5: Unify open lifecycle
+
 Extract `open_viewer()` helper. Drop `is_git_repo` check (use `get_root` error handling). Deduplicate `open()` and `open_branch()`. Test both modes still open correctly, including error cases (not a git repo, no merge-base found).
 
 ### Phase 6: Extract operations.lua + fire-and-forget
+
 Move staging operations to `operations.lua`. Replace `optimistic()` + rollback with fire-and-forget + debounced refresh. Delete dead `move_item()` and `remove_item()` functions from init.lua (replaced by section helpers in operations.lua). Wire `operations.refresh` to `debounced_refresh`. Test staging/unstaging still works, including rapid multi-file staging.
 
 ### Phase 7: Bug fixes and cleanup
 
 **diff.lua fixes:**
+
 - Always call `setup_diff_keymaps` in `show_single` (regardless of readonly) — Bug #10
 - Remove explicit `setup_diff_keymaps` calls before `show_single` in conflict/untracked paths — Bug #22
 - Add BufWinLeave cleanup for diff keymaps on working file buffers — Bug #11
@@ -1266,6 +1274,7 @@ Move staging operations to `operations.lua`. Replace `optimistic()` + rollback w
 - Extract `load_git_content` helper — 12 instances → 1
 
 **operations fixes:**
+
 - Fix folder stage/unstage to move items to target section (not just remove) — Bug #6, #7
 - Use `git checkout HEAD --` for atomic discard of staged files — Bug #4
 - Fix optimistic status for `A_` unstage: should become untracked `??` — Bug #16
@@ -1273,34 +1282,43 @@ Move staging operations to `operations.lua`. Replace `optimistic()` + rollback w
 - Add confirmation prompt for folder-level discard of tracked files — Bug #27
 
 **state/lifecycle fixes** (note: reconcile functions depend on Phase 3's `state.sections`)**:**
+
 - Update `state.current_diff` after mutations via `reconcile_current_diff()` — Bug #3
 - Update `state.viewed_diffs` after refresh via `reconcile_viewed_diffs()`
 - Explicitly delete old panel buffer in `state.reset()` or `panel.create_buf()` to prevent E95 name collision — Bug #15
 - Preserve displayed buffer cache entries on refresh: don't clear entries for buffers in `state.diff_bufs` — Bug #18
 
 **layout/UI fixes:**
+
 - Protect `equalalways` restoration with pcall — Bug #25
 - Fix `gf` (open_file) to track the originating tab instead of using `tabprevious` — Bug #12
 
 **finder.lua fixes:**
+
 - Guard `tree_buf` validity in TextChanged autocmd closer to the modification point — Bug #24
 
 **utils.lua fixes:**
+
 - Improve `path_to_ft` fallback for unknown extensions (return empty string instead of raw extension) — Bug #26
 
 ### Phase 8: Diff window reuse + Ctrl-O/I
+
 Modify `layout.open_diff_wins` to reuse existing windows when the pane count matches (Design Change #15). Only close/create windows on layout transitions (side-by-side ↔ single-pane). Stop deleting buffers on refresh — clear cache map only (Design Change #16). Test: open file A (side-by-side), open file B (side-by-side), press Ctrl-O in the right diff pane → goes back to file A at the exact cursor position. Press Ctrl-I → back to file B.
 
 ### Phase 9: Viewed diffs picker
+
 Add `state.viewed_diffs` list and `reconcile_viewed_diffs()` (called in `try_render()`). Add `track_viewed_diff()` call to `diff.open` / `diff.open_branch` / `open_file_item`. Implement the `<leader>fb` picker in new `ui/viewed.lua` — flat filtered list, `<CR>` to open, `<C-d>` to remove, same window pattern as existing finder. Add `<leader>fb` keymap to panel and diff panes. Test: open 3 files, press `<leader>fb`, see all 3 sorted by recency, filter by name, remove one with `<C-d>`, open another with `<CR>`. Also test: open a diff, save the file, verify the viewed list entry updates after refresh (reconciliation).
 
 ### Phase 10: File watching
+
 Implement `setup_watchers()` and `teardown_watchers()` using `vim.uv.new_fs_event()`. Watch `.git/index`, `.git/HEAD`, and the git root directory (recursive where supported). Wire to `debounced_refresh`. Call setup in `open_viewer()`, teardown in `close()`. Test: edit a file from another terminal while the viewer is open — panel should update within ~200ms on macOS.
 
 ### Phase 11: Compact folder rendering
+
 Refactor `build_lines` in panel.lua to pre-build a tree, compact single-child chains, then render. Update `state.folder_expanded` keys to use the compacted path. Verify finder.lua (which reuses `build_lines`) also renders compact folders. Test: a path like `src/components/shared/Button.tsx` renders as `src/components/shared/` → `Button.tsx` when no siblings exist at intermediate levels.
 
 **Bugs fixed implicitly by earlier phases (no Phase 7 work needed):**
+
 - Bug #1 (concurrent optimistic corruption) — Phase 6: fire-and-forget eliminates rollback
 - Bug #5, #8 (autocmd accumulation) — Phase 1: augroup with clear
 - Bug #9 (branch mode missing auto-refresh) — Phase 1 + Phase 5: shared `setup_autocmds` covers both modes
@@ -1405,17 +1423,17 @@ Feature gaps from features.md that are **not addressed** by this proposal. These
 
 Alternatives that were considered and rejected:
 
-| Decision | Alternative | Why Rejected |
-|----------|-------------|-------------|
-| Fire-and-forget optimistic | Operation queue | Queue delays optimistic feedback for queued ops — worse UX. Queue also adds complexity (run_next, drain detection). |
-| Fire-and-forget optimistic | Rollback (current approach) | Concurrent rollbacks corrupt each other (Bug #1). Correct rollback requires serialization, which has the queue's UX problem. |
-| Augroup in init.lua | Separate autocmds.lua | Callback indirection adds complexity without reducing it. The fix is the augroup, not the file. |
-| Navigation in init.lua | Separate navigation.lua | ~60 lines. Too small for its own module. diff.lua already deferred-requires init.lua for close keymaps. |
-| `state.sections` list | `state.files` dict (current) | Dict requires `if mode == "branch"` in every consumer. List is self-describing and uniform. |
-| `state.main_win` tracking | `wincmd l` (current) | `wincmd l` is fragile — depends on window layout being exactly panel|main. Direct handle is deterministic. |
-| `git checkout HEAD --` | unstage then discard (current) | Two-step is non-atomic. If step 1 succeeds and step 2 fails, UI and git state diverge (Bug #4). |
-| Drop `is_git_repo` | Keep it (current) | Redundant with `get_root`. Adds an extra async nesting level for no benefit. |
-| Window reuse (native jumplist) | Custom diff history | Custom history requires new state (`diff_history`, `diff_history_pos`), reimplements what Neovim does natively, and doesn't preserve cursor position within files. Window reuse gives Ctrl-O/I for free. |
-| Window reuse (native jumplist) | Close/recreate windows (current) | Destroys per-window jumplist. No Ctrl-O/I. Window reuse also avoids the overhead of closing and creating windows on every navigation. |
-| Viewed diffs picker (unlisted buffers) | Listed buffers in tabline (VS Code style) | Listed diff buffers pollute buffer list, confuse buffer management plugins, and require lifecycle management. Unlisted buffers with a dedicated picker gives discoverability without pollution. |
-| Compact folder tree pre-build | Inline compaction during render | Inline compaction would require complex lookahead. Pre-building the tree separates concerns: tree construction → compaction → rendering. |
+| Decision                               | Alternative                               | Why Rejected                                                                                                                                                                                             |
+| -------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Fire-and-forget optimistic             | Operation queue                           | Queue delays optimistic feedback for queued ops — worse UX. Queue also adds complexity (run_next, drain detection).                                                                                      |
+| Fire-and-forget optimistic             | Rollback (current approach)               | Concurrent rollbacks corrupt each other (Bug #1). Correct rollback requires serialization, which has the queue's UX problem.                                                                             |
+| Augroup in init.lua                    | Separate autocmds.lua                     | Callback indirection adds complexity without reducing it. The fix is the augroup, not the file.                                                                                                          |
+| Navigation in init.lua                 | Separate navigation.lua                   | ~60 lines. Too small for its own module. diff.lua already deferred-requires init.lua for close keymaps.                                                                                                  |
+| `state.sections` list                  | `state.files` dict (current)              | Dict requires `if mode == "branch"` in every consumer. List is self-describing and uniform.                                                                                                              |
+| `state.main_win` tracking              | `wincmd l` (current)                      | `wincmd l` is fragile — depends on window layout being exactly panel                                                                                                                                     | main. Direct handle is deterministic. |
+| `git checkout HEAD --`                 | unstage then discard (current)            | Two-step is non-atomic. If step 1 succeeds and step 2 fails, UI and git state diverge (Bug #4).                                                                                                          |
+| Drop `is_git_repo`                     | Keep it (current)                         | Redundant with `get_root`. Adds an extra async nesting level for no benefit.                                                                                                                             |
+| Window reuse (native jumplist)         | Custom diff history                       | Custom history requires new state (`diff_history`, `diff_history_pos`), reimplements what Neovim does natively, and doesn't preserve cursor position within files. Window reuse gives Ctrl-O/I for free. |
+| Window reuse (native jumplist)         | Close/recreate windows (current)          | Destroys per-window jumplist. No Ctrl-O/I. Window reuse also avoids the overhead of closing and creating windows on every navigation.                                                                    |
+| Viewed diffs picker (unlisted buffers) | Listed buffers in tabline (VS Code style) | Listed diff buffers pollute buffer list, confuse buffer management plugins, and require lifecycle management. Unlisted buffers with a dedicated picker gives discoverability without pollution.          |
+| Compact folder tree pre-build          | Inline compaction during render           | Inline compaction would require complex lookahead. Pre-building the tree separates concerns: tree construction → compaction → rendering.                                                                 |
