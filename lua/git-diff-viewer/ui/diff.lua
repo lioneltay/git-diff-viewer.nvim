@@ -22,16 +22,6 @@ local config = require("git-diff-viewer.config")
 
 local M = {}
 
--- Set buffer in a window using the standard API.
--- We allow autocmds to fire so that:
---   1. Neovim's diff algorithm properly registers buffer changes
---   2. Plugins like auto-reload.nvim receive BufUnload for old buffers
---      (preventing E94 from stale watchers on unloaded buffers)
--- Our scratch buffers have buftype="nofile" so auto-reload skips them.
-local function set_win_buf(win, buf)
-  vim.api.nvim_win_set_buf(win, buf)
-end
-
 -- Load a real file buffer for diff display.
 -- Suppresses BufReadPost for NEW buffers to prevent auto-reload.nvim from
 -- watching files loaded by our plugin (avoids E94 from stale checktime timers).
@@ -237,21 +227,8 @@ end
 
 -- ─── Single-pane display ──────────────────────────────────────────────────────
 
--- Restore focus to the panel window and update panel to reflect active diff.
+-- Restore focus to the panel window.
 local function refocus_panel()
-  local panel = require("git-diff-viewer.ui.panel")
-  -- Re-render panel to update the active file highlight
-  panel.render()
-  -- Sync panel cursor to the active file
-  if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) and state.current_diff and state.current_diff.item then
-    local target = state.current_diff.item
-    for i, line in ipairs(state.panel_lines) do
-      if line.type == "file" and line.item.path == target.path and line.item.section == target.section then
-        vim.api.nvim_win_set_cursor(state.panel_win, { i, 0 })
-        break
-      end
-    end
-  end
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     vim.api.nvim_set_current_win(state.panel_win)
   end
@@ -271,7 +248,7 @@ local function show_single(buf)
   local wins = layout.open_diff_wins(1)
   local win = wins[1]
 
-  set_win_buf(win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
   state.diff_bufs = { buf }
 
   -- Clear any lingering diff mode settings from previous side-by-side diff
@@ -294,15 +271,15 @@ local function show_side_by_side(left_buf, right_buf)
   disable_diff_mode(left_win)
   disable_diff_mode(right_win)
 
-  set_win_buf(left_win, left_buf)
-  set_win_buf(right_win, right_buf)
+  vim.api.nvim_win_set_buf(left_win, left_buf)
+  vim.api.nvim_win_set_buf(right_win, right_buf)
   state.diff_bufs = { left_buf, right_buf }
 
   enable_diff_mode(left_win)
   enable_diff_mode(right_win)
 
-  -- Force Neovim to recompute diff — required because set_win_buf uses
-  -- noautocmd which suppresses the internal events diff mode relies on.
+  -- Force Neovim to recompute diff — programmatic buffer+diff-mode changes
+  -- don't always trigger Neovim's internal diff recomputation.
   vim.cmd("diffupdate")
 
   setup_diff_keymaps(left_buf)

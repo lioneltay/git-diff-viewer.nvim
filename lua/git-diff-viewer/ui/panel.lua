@@ -354,36 +354,18 @@ function M.render()
     vim.api.nvim_buf_add_highlight(buf, ns, h.group, h.line, h.col_start, h.col_end)
   end
 
-  -- Restore cursor: try to follow the file the user was interacting with.
-  -- Priority: 1) active diff item, 2) file under cursor before rebuild, 3) old line number
+  -- Restore cursor: try to keep it on the same file, fall back to same line number.
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     local target_line = nil
 
-    -- Determine the path to follow: prefer active diff, fall back to cursor item
     local follow_path = cursor_item_path
-    local follow_section = nil
-    if state.current_diff and state.current_diff.item then
-      follow_path = state.current_diff.item.path
-      follow_section = state.current_diff.item.section
-    end
 
     if follow_path then
-      -- Exact match: same path and section
-      if follow_section then
-        for i, line in ipairs(lines) do
-          if line.type == "file" and line.item.path == follow_path and line.item.section == follow_section then
-            target_line = i
-            break
-          end
-        end
-      end
-      -- Fallback: path only (file may have moved sections after stage/unstage)
-      if not target_line then
-        for i, line in ipairs(lines) do
-          if line.type == "file" and line.item.path == follow_path then
-            target_line = i
-            break
-          end
+      -- Find the file the cursor was on (may have moved sections after stage/unstage)
+      for i, line in ipairs(lines) do
+        if line.type == "file" and line.item.path == follow_path then
+          target_line = i
+          break
         end
       end
     end
