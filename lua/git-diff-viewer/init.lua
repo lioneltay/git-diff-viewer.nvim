@@ -19,6 +19,13 @@ local operations = require("git-diff-viewer.operations")
 -- Augroup for all plugin autocmds — ensures clean teardown on close/reopen
 local augroup = vim.api.nvim_create_augroup("GitDiffViewer", { clear = true })
 
+-- Guard: prevent watcher → load_and_render → watcher infinite loop
+local refresh_in_flight = false
+local pending_watcher_refresh = false
+
+-- Forward declaration (assigned later, used in try_render)
+local debounced_refresh
+
 -- ─── Setup ────────────────────────────────────────────────────────────────────
 
 function M.setup(opts)
@@ -51,7 +58,7 @@ local function reconcile_current_diff()
       end
     end
   end
-  -- Item no longer exists — clear
+  -- Item no longer exists — clear diff state but leave panes as-is.
   state.current_diff = nil
 end
 
@@ -76,6 +83,7 @@ end
 -- Called on open and on refresh.
 -- Uses generation counter to discard stale callbacks.
 function M.load_and_render()
+  refresh_in_flight = true
   local cwd = state.git_root
   local gen = state.next_generation()
 
@@ -88,6 +96,8 @@ function M.load_and_render()
   local function try_render()
     pending = pending - 1
     if pending > 0 then return end
+
+    refresh_in_flight = false
 
     -- Stale callback — a newer load_and_render was started
     if state.generation ~= gen then return end
@@ -115,6 +125,13 @@ function M.load_and_render()
     reconcile_current_diff()
     reconcile_viewed_diffs()
     panel.render()
+    diff.refresh_diff_bufs()
+
+    -- If a watcher event arrived while we were loading, re-trigger
+    if pending_watcher_refresh then
+      pending_watcher_refresh = false
+      debounced_refresh()
+    end
   end
 
   git.status(cwd, function(ok, raw)
@@ -165,7 +182,7 @@ local teardown_watchers
 -- Debounced refresh timer — shared across autocmds
 local refresh_timer = nil
 
-local function debounced_refresh()
+debounced_refresh = function()
   if not state.is_active() then return end
   if refresh_timer then
     refresh_timer:stop()
@@ -188,7 +205,6 @@ local function setup_autocmds()
     callback = function()
       if not state.tab then return end
       if not state.is_active() then
-        -- Our tab was the one closed
         teardown_autocmds()
         teardown_watchers()
         diff.restore_bufhidden()
@@ -196,6 +212,21 @@ local function setup_autocmds()
       end
     end,
   })
+
+  -- Protect diff and panel windows from external closure (e.g., claudecode.nvim's
+  -- closeAllDiffTabs tool closes all windows with diff=true globally).
+  -- Our own code uses state._orig_win_close to bypass this when needed.
+  local orig_win_close = vim.api.nvim_win_close
+  state._orig_win_close = orig_win_close
+  vim.api.nvim_win_close = function(win, force)
+    if state.is_active() then
+      if win == state.panel_win then return end
+      for _, w in ipairs(state.diff_wins) do
+        if w == win then return end
+      end
+    end
+    return orig_win_close(win, force)
+  end
 
   -- Fix: floating windows (noice.nvim cmdline, which-key popup, snacks
   -- backdrop) inherit diff=true from the diff window that had focus when
@@ -311,10 +342,14 @@ teardown_autocmds = function()
     refresh_timer:stop()
     refresh_timer = nil
   end
-  -- Restore original nvim_open_win if we intercepted it
+  -- Restore original nvim_open_win / nvim_win_close if we intercepted them
   if state._orig_open_win then
     vim.api.nvim_open_win = state._orig_open_win
     state._orig_open_win = nil
+  end
+  if state._orig_win_close then
+    vim.api.nvim_win_close = state._orig_win_close
+    state._orig_win_close = nil
   end
 end
 
@@ -333,11 +368,16 @@ end
 
 -- Schedule a debounced refresh from a file watcher callback.
 -- Uses vim.schedule since watcher callbacks fire on the libuv thread.
+-- Defers to pending_watcher_refresh if a load is already in flight
+-- to prevent watcher → load → watcher infinite loops.
 local function watcher_refresh()
   vim.schedule(function()
-    if state.is_active() then
-      debounced_refresh()
+    if not state.is_active() then return end
+    if refresh_in_flight then
+      pending_watcher_refresh = true
+      return
     end
+    debounced_refresh()
   end)
 end
 

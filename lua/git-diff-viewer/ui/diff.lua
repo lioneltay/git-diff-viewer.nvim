@@ -251,8 +251,17 @@ local function show_single(buf)
   vim.api.nvim_win_set_buf(win, buf)
   state.diff_bufs = { buf }
 
+  -- Reload real file buffers from disk (picks up external changes)
+  if vim.bo[buf].buftype == "" then
+    pcall(vim.cmd, "checktime " .. buf)
+  end
+
   -- Clear any lingering diff mode settings from previous side-by-side diff
   disable_diff_mode(win)
+
+  -- Lock window to this buffer — prevents IDE bridge / external plugins
+  -- from loading unrelated buffers into our diff pane.
+  vim.api.nvim_set_option_value("winfixbuf", true, { win = win })
 
   setup_diff_keymaps(buf)
   refocus_panel()
@@ -275,8 +284,20 @@ local function show_side_by_side(left_buf, right_buf)
   vim.api.nvim_win_set_buf(right_win, right_buf)
   state.diff_bufs = { left_buf, right_buf }
 
+  -- Reload real file buffers from disk (picks up external changes)
+  for _, b in ipairs(state.diff_bufs) do
+    if vim.bo[b].buftype == "" then
+      pcall(vim.cmd, "checktime " .. b)
+    end
+  end
+
   enable_diff_mode(left_win)
   enable_diff_mode(right_win)
+
+  -- Lock windows to their buffers — prevents IDE bridge / external plugins
+  -- from loading unrelated buffers into our diff panes.
+  vim.api.nvim_set_option_value("winfixbuf", true, { win = left_win })
+  vim.api.nvim_set_option_value("winfixbuf", true, { win = right_win })
 
   -- Force Neovim to recompute diff — programmatic buffer+diff-mode changes
   -- don't always trigger Neovim's internal diff recomputation.
@@ -511,6 +532,62 @@ function M.open(item)
     "(error loading HEAD content)",
     function() show_side_by_side(left_buf, right_buf) end
   )
+end
+
+-- Refresh diff buffers to pick up external changes.
+-- Real file buffers get :checktime (reloads from disk if changed).
+-- Git show scratch buffers get their content re-fetched.
+-- Called by load_and_render() after sections are rebuilt.
+function M.refresh_diff_bufs()
+  local bufs = state.diff_bufs or {}
+  if #bufs == 0 then return end
+
+  local cwd = state.git_root
+  if not cwd then return end
+
+  local pending = 0
+
+  local function on_done()
+    pending = pending - 1
+    if pending == 0 and state.is_active() then
+      vim.cmd("diffupdate")
+    end
+  end
+
+  for _, buf in ipairs(bufs) do
+    if not vim.api.nvim_buf_is_valid(buf) then goto continue end
+
+    local bt = vim.api.nvim_get_option_value("buftype", { buf = buf })
+    if bt == "nofile" then
+      -- Scratch buffer (git show) — re-fetch content by parsing the buffer name
+      local name = vim.api.nvim_buf_get_name(buf)
+      local cache_key = name:match("^git%-diff%-viewer://(.+)$")
+      if cache_key then
+        local git_fn
+        local path = cache_key:match("^HEAD:(.+)$")
+        if path then
+          git_fn = function(cb) git.show_head(cwd, path, cb) end
+        else
+          path = cache_key:match("^:0:(.+)$")
+          if path then
+            git_fn = function(cb) git.show_staged(cwd, path, cb) end
+          end
+        end
+        if git_fn then
+          pending = pending + 1
+          load_git_content(git_fn, buf, "(error refreshing)", on_done)
+        end
+      end
+    end
+    -- Real file buffers are updated by Neovim's autoread or the IDE bridge.
+
+    ::continue::
+  end
+
+  -- If no async loads were needed (e.g. only real file buffers), update now
+  if pending == 0 and state.is_active() then
+    vim.cmd("diffupdate")
+  end
 end
 
 return M

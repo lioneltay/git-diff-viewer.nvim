@@ -28,6 +28,7 @@ local function set_panel_win_opts(win)
   vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
   vim.api.nvim_set_option_value("wrap", false, { win = win })
   vim.api.nvim_set_option_value("winfixwidth", true, { win = win })
+  vim.api.nvim_set_option_value("winfixbuf", true, { win = win })
   vim.api.nvim_set_option_value("foldcolumn", "0", { win = win })
   vim.wo[win].winhl = "Normal:Normal,EndOfBuffer:Normal,NormalNC:Normal"
 end
@@ -101,6 +102,12 @@ function M.close()
   end
 end
 
+-- Close a window using the original nvim_win_close, bypassing our interceptor.
+local function raw_win_close(win, force)
+  local close_fn = state._orig_win_close or vim.api.nvim_win_close
+  close_fn(win, force)
+end
+
 -- Count the number of valid diff windows.
 local function valid_diff_win_count()
   local n = 0
@@ -122,6 +129,13 @@ function M.open_diff_wins(count)
   local ea = vim.o.equalalways
   vim.o.equalalways = false
 
+  -- Temporarily clear winfixbuf on existing diff windows so we can swap buffers
+  for _, w in ipairs(state.diff_wins) do
+    if vim.api.nvim_win_is_valid(w) then
+      pcall(vim.api.nvim_set_option_value, "winfixbuf", false, { win = w })
+    end
+  end
+
   local ok, wins = pcall(function()
     local current_count = valid_diff_win_count()
 
@@ -135,7 +149,7 @@ function M.open_diff_wins(count)
     if current_count == 2 and count == 1 then
       local w2 = state.diff_wins[2]
       if w2 and vim.api.nvim_win_is_valid(w2) then
-        vim.api.nvim_win_close(w2, true)
+        raw_win_close(w2, true)
       end
       state.diff_wins = { state.diff_wins[1] }
       state.diff_bufs = {}
@@ -159,7 +173,7 @@ function M.open_diff_wins(count)
     -- No existing windows (0 → N) or invalid state — create from scratch
     for _, w in ipairs(state.diff_wins) do
       if vim.api.nvim_win_is_valid(w) and w ~= state.panel_win then
-        vim.api.nvim_win_close(w, true)
+        raw_win_close(w, true)
       end
     end
     state.diff_wins = {}
