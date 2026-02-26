@@ -52,7 +52,7 @@ function M.open()
 
   local tree_win = vim.api.nvim_open_win(tree_buf, false, {
     relative = "editor",
-    row = start_row + 3, -- input content(1) + separator border(1) offset from start_row+1
+    row = start_row + 4, -- below input border: top-border(1) + content(1) + bottom-border(1)
     col = start_col,
     width = width,
     height = tree_height,

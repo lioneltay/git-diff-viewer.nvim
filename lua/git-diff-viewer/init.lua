@@ -244,7 +244,12 @@ local function setup_autocmds()
   -- Strategy: intercept nvim_open_win to strip diff from new floating
   -- windows immediately at creation time — before the diff engine
   -- recalculates. This catches all plugins regardless of whether they
-  -- suppress autocmds. CmdlineEnter/Leave and WinEnter act as fallbacks.
+  -- suppress autocmds. CmdlineLeave and WinEnter act as safety fallbacks.
+  --
+  -- Previous approach also disabled diff in CmdlineEnter as a backup,
+  -- but that caused the diff to visibly vanish when pressing `:`. Since
+  -- the nvim_open_win hook reliably prevents floating windows from
+  -- inheriting diff, the proactive disable is no longer needed.
 
   local function restore_diff_wins()
     local dw = state.diff_wins or {}
@@ -270,6 +275,9 @@ local function setup_autocmds()
     if state.is_active() and config and config.relative and config.relative ~= "" then
       if vim.api.nvim_win_is_valid(win) and vim.wo[win].diff then
         vim.wo[win].diff = false
+        -- Deferred restore: ensure diff windows weren't disrupted by the
+        -- diff engine momentarily seeing a third participant.
+        vim.schedule(restore_diff_wins)
       end
     end
     return win
@@ -278,22 +286,8 @@ local function setup_autocmds()
   -- Restore the original nvim_open_win on teardown
   state._orig_open_win = orig_open_win
 
-  -- Suspend diff before cmdline mode (noice.nvim may bypass our hook).
-  vim.api.nvim_create_autocmd("CmdlineEnter", {
-    group = augroup,
-    callback = function()
-      if not state.is_active() then return end
-      local dw = state.diff_wins or {}
-      if #dw < 2 then return end
-      for _, w in ipairs(dw) do
-        if vim.api.nvim_win_is_valid(w) then
-          vim.wo[w].diff = false
-        end
-      end
-    end,
-  })
-
-  -- Restore diff when cmdline mode closes.
+  -- Safety net: restore diff after cmdline closes, in case any plugin
+  -- managed to disrupt diff mode during cmdline interaction.
   vim.api.nvim_create_autocmd("CmdlineLeave", {
     group = augroup,
     callback = function()
@@ -302,12 +296,25 @@ local function setup_autocmds()
     end,
   })
 
-  -- WinEnter fallback: restore diff if any window lost it.
+  -- WinEnter fallback: (1) strip diff from floating windows that bypassed
+  -- the nvim_open_win hook, and (2) restore diff if any diff window lost it.
   vim.api.nvim_create_autocmd("WinEnter", {
     group = augroup,
     callback = function()
       if not state.is_active() then return end
       if vim.api.nvim_get_current_tabpage() ~= state.tab then return end
+
+      -- Strip diff from floating windows (catches hook bypasses, e.g.
+      -- plugins that cached nvim_open_win before our intercept was installed)
+      local win = vim.api.nvim_get_current_win()
+      local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+      if ok and cfg.relative and cfg.relative ~= "" and vim.wo[win].diff then
+        vim.wo[win].diff = false
+        vim.schedule(restore_diff_wins)
+        return
+      end
+
+      -- Restore diff on diff windows if any lost it
       local dw = state.diff_wins or {}
       if #dw < 2 then return end
       for _, w in ipairs(dw) do

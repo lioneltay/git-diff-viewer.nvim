@@ -34,8 +34,8 @@ function M.open()
       -- Sort: current target first, then alphabetical
       local target = state.target_branch
       table.sort(branches, function(a, b)
-        if a == target then return true end
-        if b == target then return false end
+        if a == target and b ~= target then return true end
+        if b == target and a ~= target then return false end
         return a < b
       end)
 
@@ -83,7 +83,7 @@ function M._show_picker(branches)
 
   local list_win = vim.api.nvim_open_win(list_buf, false, {
     relative = "editor",
-    row = start_row + 3,
+    row = start_row + 4,
     col = start_col,
     width = width,
     height = list_height,
@@ -187,9 +187,11 @@ function M._show_picker(branches)
     buffer = input_buf,
     group = aug,
     callback = function()
-      if not vim.api.nvim_buf_is_valid(list_buf) then return end
-      if not vim.api.nvim_buf_is_valid(input_buf) then return end
-      render_list(get_filter())
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(list_buf) then return end
+        if not vim.api.nvim_buf_is_valid(input_buf) then return end
+        render_list(get_filter())
+      end)
     end,
   })
 
