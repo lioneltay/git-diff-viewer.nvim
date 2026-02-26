@@ -212,6 +212,39 @@ describe("utils", function()
     end)
   end)
 
+  -- ─── fuzzy_match ──────────────────────────────────────────────────────────
+
+  describe("fuzzy_match", function()
+    it("matches empty query to any string", function()
+      assert.is_true(utils.fuzzy_match("anything", ""))
+    end)
+
+    it("matches exact substring", function()
+      assert.is_true(utils.fuzzy_match("src/components/Button.tsx", "Button"))
+    end)
+
+    it("matches fuzzy characters in order", function()
+      assert.is_true(utils.fuzzy_match("src/components/Button.tsx", "scbt"))
+    end)
+
+    it("rejects characters out of order", function()
+      assert.is_false(utils.fuzzy_match("abc", "cb"))
+    end)
+
+    it("rejects query with missing characters", function()
+      assert.is_false(utils.fuzzy_match("abc", "abz"))
+    end)
+
+    it("is case insensitive", function()
+      assert.is_true(utils.fuzzy_match("Button.tsx", "btn"))
+      assert.is_true(utils.fuzzy_match("button.tsx", "BTN"))
+    end)
+
+    it("matches full path fuzzy", function()
+      assert.is_true(utils.fuzzy_match("lua/git-diff-viewer/ui/panel.lua", "pnl"))
+    end)
+  end)
+
   -- ─── get_status_hl ─────────────────────────────────────────────────────────
 
   describe("get_status_hl", function()

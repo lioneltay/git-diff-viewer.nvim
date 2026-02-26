@@ -185,4 +185,20 @@ function M.get_status_hl(icon)
   return map[icon] or "GitDiffViewerStatusM"
 end
 
+-- Fuzzy match: check if all characters in query appear in order in str.
+-- Case-insensitive. Returns true/false.
+function M.fuzzy_match(str, query)
+  if query == "" then return true end
+  str = str:lower()
+  query = query:lower()
+  local si = 1
+  for qi = 1, #query do
+    local ch = query:sub(qi, qi)
+    local found = str:find(ch, si, true)
+    if not found then return false end
+    si = found + 1
+  end
+  return true
+end
+
 return M

@@ -271,7 +271,7 @@ local function build_lines(sections, opts)
 
     local filtered = {}
     for _, item in ipairs(items) do
-      if filter == "" or item.path:lower():find(filter:lower(), 1, true) then
+      if filter == "" or utils.fuzzy_match(item.path, filter) then
         table.insert(filtered, item)
       end
     end
