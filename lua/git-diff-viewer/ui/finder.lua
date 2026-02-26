@@ -26,9 +26,7 @@ function M.open()
   vim.bo[input_buf].bufhidden = "wipe"
   vim.bo[input_buf].buftype = "nofile"
   vim.bo[input_buf].filetype = "git-diff-viewer-finder"
-  vim.bo[input_buf].complete = ""
-  vim.bo[input_buf].omnifunc = ""
-  vim.bo[input_buf].completefunc = ""
+  vim.b[input_buf].completion = false
   vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "" })
 
   local input_win = vim.api.nvim_open_win(input_buf, true, {
