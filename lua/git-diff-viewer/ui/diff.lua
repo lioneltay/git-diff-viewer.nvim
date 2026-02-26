@@ -6,7 +6,7 @@
 --   MM in Changes         → side-by-side: staged :0: (read-only) | working file (editable)
 --   MM in Staged          → side-by-side: HEAD (read-only) | staged :0: (read-only)
 --   New/untracked         → single pane: working file (editable)
---   Staged new (A_)       → single pane: staged :0: (read-only)
+--   Staged new (A_/AM)    → single pane: staged :0: (read-only)
 --   Deleted (unstaged)    → single pane: HEAD (read-only)
 --   Deleted (staged)      → single pane: HEAD (read-only)
 --   Renamed               → side-by-side: HEAD:old (read-only) | working file (editable)
@@ -375,8 +375,9 @@ function M.open(item)
   local x = xy:sub(1, 1) -- staged char
   local y = xy:sub(2, 2) -- unstaged char
 
-  -- Staged new file (A_) — single pane showing staged content
-  if x == "A" and (y == " " or y == "-") then
+  -- Staged new file in Staged section — single pane showing staged content.
+  -- Covers A_ (pure staged) and AM (staged + modified) — no HEAD exists either way.
+  if x == "A" and section == "staged" then
     local cache_key = ":0:" .. path
     local staged_buf = get_or_create_scratch(cache_key, path)
     load_git_content(

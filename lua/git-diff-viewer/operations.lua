@@ -269,11 +269,25 @@ function M.discard_item(line)
     -- two-step unstage + discard (which can leave inconsistent state if discard fails)
     if item.section == "staged" then
       local paths = { item.path }
-      fire_git(function()
-        remove_from_section(item.path, "staged")
-      end, function(cb)
-        git.checkout_head(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
-      end)
+      local x = (xy or ""):sub(1, 1)
+
+      if x == "A" or not state.has_commits then
+        -- Newly added file — doesn't exist in HEAD, so just unstage it
+        fire_git(function()
+          remove_from_section(item.path, "staged")
+          add_to_section("changes", vim.tbl_extend("force", item, {
+            section = "changes", status = "untracked", xy = "??",
+          }))
+        end, function(cb)
+          git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        end)
+      else
+        fire_git(function()
+          remove_from_section(item.path, "staged")
+        end, function(cb)
+          git.checkout_head(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        end)
+      end
       return
     end
 

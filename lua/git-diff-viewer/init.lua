@@ -19,9 +19,10 @@ local operations = require("git-diff-viewer.operations")
 -- Augroup for all plugin autocmds — ensures clean teardown on close/reopen
 local augroup = vim.api.nvim_create_augroup("GitDiffViewer", { clear = true })
 
--- Guard: prevent watcher → load_and_render → watcher infinite loop
+-- Guard: prevent watcher → load_and_render → watcher infinite loop.
+-- Watcher events during a refresh are dropped (not queued) to break the
+-- feedback cycle where git commands read .git/index and re-trigger the watcher.
 local refresh_in_flight = false
-local pending_watcher_refresh = false
 
 -- Forward declaration (assigned later, used in try_render)
 local debounced_refresh
@@ -126,12 +127,6 @@ function M.load_and_render()
     reconcile_viewed_diffs()
     panel.render()
     diff.refresh_diff_bufs()
-
-    -- If a watcher event arrived while we were loading, re-trigger
-    if pending_watcher_refresh then
-      pending_watcher_refresh = false
-      debounced_refresh()
-    end
   end
 
   git.status(cwd, function(ok, raw)
@@ -368,21 +363,21 @@ end
 
 -- Schedule a debounced refresh from a file watcher callback.
 -- Uses vim.schedule since watcher callbacks fire on the libuv thread.
--- Defers to pending_watcher_refresh if a load is already in flight
--- to prevent watcher → load → watcher infinite loops.
+-- Events during an in-flight refresh are dropped to break the feedback
+-- loop (git commands reading .git/index re-trigger the watcher on macOS).
 local function watcher_refresh()
   vim.schedule(function()
     if not state.is_active() then return end
-    if refresh_in_flight then
-      pending_watcher_refresh = true
-      return
-    end
+    if refresh_in_flight then return end
     debounced_refresh()
   end)
 end
 
--- Start file watchers for .git/index and .git/HEAD.
--- These detect external changes (staging from CLI, other tools, etc.)
+-- Start directory watchers for git state changes.
+-- Watches directories (not individual files) because git replaces files
+-- via rename (.git/index.lock → .git/index), which changes the inode.
+-- On macOS, kqueue watches by inode, so file-level watchers die after
+-- the first git operation. Directory watchers survive file replacements.
 local function setup_watchers()
   teardown_watchers()
   local root = state.git_root
@@ -390,34 +385,33 @@ local function setup_watchers()
 
   local git_dir = root .. "/.git"
 
-  -- Watch .git/index — changes when files are staged/unstaged externally
-  local index_watcher = vim.uv.new_fs_event()
-  if index_watcher then
+  -- Helper: start a directory watcher with an optional filename filter.
+  local function watch_dir(dir, filter_fn)
+    local watcher = vim.uv.new_fs_event()
+    if not watcher then return end
     local ok = pcall(function()
-      index_watcher:start(git_dir .. "/index", {}, function(err)
-        if not err then watcher_refresh() end
+      watcher:start(dir, {}, function(err, filename)
+        if err then return end
+        if filter_fn and not filter_fn(filename) then return end
+        watcher_refresh()
       end)
     end)
     if ok then
-      table.insert(state.watchers, index_watcher)
+      table.insert(state.watchers, watcher)
     else
-      index_watcher:close()
+      watcher:close()
     end
   end
 
-  -- Watch .git/HEAD — changes on branch switch, commit, etc.
-  local head_watcher = vim.uv.new_fs_event()
-  if head_watcher then
-    local ok = pcall(function()
-      head_watcher:start(git_dir .. "/HEAD", {}, function(err)
-        if not err then watcher_refresh() end
-      end)
-    end)
-    if ok then
-      table.insert(state.watchers, head_watcher)
-    else
-      head_watcher:close()
-    end
+  -- Watch .git/ directory for index and HEAD changes (staging, branch switch)
+  watch_dir(git_dir, function(filename)
+    return filename == "index" or filename == "HEAD"
+  end)
+
+  -- Watch .git/refs/heads/ for branch ref changes (commits, rebase, etc.)
+  local refs_dir = git_dir .. "/refs/heads"
+  if vim.fn.isdirectory(refs_dir) == 1 then
+    watch_dir(refs_dir)
   end
 end
 
