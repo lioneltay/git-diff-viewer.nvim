@@ -25,14 +25,6 @@ local function run(args, opts, callback)
   end)
 end
 
--- Check whether the current working directory is inside a git repo.
--- callback(is_git_repo: boolean)
-function M.is_git_repo(cwd, callback)
-  run({ "git", "rev-parse", "--is-inside-work-tree" }, { cwd = cwd }, function(ok)
-    callback(ok)
-  end)
-end
-
 -- Get the git root directory.
 -- callback(ok: boolean, root: string)
 function M.get_root(cwd, callback)
@@ -87,16 +79,6 @@ end
 function M.show_staged(cwd, path, callback)
   run({ "git", "show", ":0:" .. path }, { cwd = cwd }, function(ok, stdout)
     callback(ok, stdout)
-  end)
-end
-
--- Check whether a file is a submodule (mode 160000 in ls-files --stage).
--- callback(is_submodule: boolean)
-function M.is_submodule(cwd, path, callback)
-  run({ "git", "ls-files", "--stage", "--", path }, { cwd = cwd }, function(ok, stdout)
-    -- Output format: "<mode> <hash> <stage>\t<path>"
-    -- Submodule mode is 160000
-    callback(ok and stdout:match("^160000") ~= nil)
   end)
 end
 

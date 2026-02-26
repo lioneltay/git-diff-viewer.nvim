@@ -126,7 +126,11 @@ function M.load_and_render()
     reconcile_current_diff()
     reconcile_viewed_diffs()
     panel.render()
-    diff.refresh_diff_bufs()
+    if not state.current_diff and #(state.diff_bufs or {}) > 0 then
+      diff.show_empty()
+    else
+      diff.refresh_diff_bufs()
+    end
   end
 
   git.status(cwd, function(ok, raw)
@@ -505,57 +509,31 @@ local function all_file_items()
   local items = {}
   for _, line in ipairs(state.panel_lines) do
     if line.type == "file" then
-      table.insert(items, { item = line.item })
+      table.insert(items, line.item)
     end
   end
   return items
 end
 
-function M.next_file()
+local function cycle_file(direction)
   local items = all_file_items()
   if #items == 0 then return end
-
   local current = state.current_diff
   if not current then
-    diff.open(items[1].item)
+    diff.open(items[direction == 1 and 1 or #items])
     return
   end
-
-  for i, entry in ipairs(items) do
-    if entry.item.path == current.item.path and entry.item.section == current.item.section then
-      local next_entry = items[i + 1] or items[1]
-      diff.open(next_entry.item)
+  for i, item in ipairs(items) do
+    if item.path == current.item.path and item.section == current.item.section then
+      local target = items[i + direction] or items[direction == 1 and 1 or #items]
+      diff.open(target)
       return
     end
   end
 end
 
-function M.prev_file()
-  local items = all_file_items()
-  if #items == 0 then return end
-
-  local current = state.current_diff
-  if not current then
-    diff.open(items[#items].item)
-    return
-  end
-
-  for i, entry in ipairs(items) do
-    if entry.item.path == current.item.path and entry.item.section == current.item.section then
-      local prev_entry = items[i - 1] or items[#items]
-      diff.open(prev_entry.item)
-      return
-    end
-  end
-end
-
--- ─── Operations (delegated to operations.lua) ────────────────────────────────
-
-function M.stage_item(line) operations.stage_item(line) end
-function M.unstage_item(line) operations.unstage_item(line) end
-function M.discard_item(line) operations.discard_item(line) end
-function M.stage_all() operations.stage_all() end
-function M.unstage_all() operations.unstage_all() end
+function M.next_file() cycle_file(1) end
+function M.prev_file() cycle_file(-1) end
 
 -- ─── Commands ─────────────────────────────────────────────────────────────────
 

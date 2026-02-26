@@ -19,7 +19,6 @@ M.defaults = {
     focus_diff = "<C-l>",
     next_file = "<Tab>",
     prev_file = "<S-Tab>",
-    filter = "/",
   },
 
   -- Keymaps for the diff pane buffers

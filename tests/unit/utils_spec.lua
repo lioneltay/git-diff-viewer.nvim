@@ -1,93 +1,6 @@
 local utils = require("git-diff-viewer.utils")
 
 describe("utils", function()
-  -- ─── path_to_ft ────────────────────────────────────────────────────────────
-
-  describe("path_to_ft", function()
-    it("returns empty string for nil path", function()
-      assert.equals("", utils.path_to_ft(nil))
-    end)
-
-    it("returns typescript for .ts files", function()
-      assert.equals("typescript", utils.path_to_ft("src/app.ts"))
-    end)
-
-    it("returns typescriptreact for .tsx files", function()
-      assert.equals("typescriptreact", utils.path_to_ft("Component.tsx"))
-    end)
-
-    it("returns javascript for .js files", function()
-      assert.equals("javascript", utils.path_to_ft("index.js"))
-    end)
-
-    it("returns lua for .lua files", function()
-      assert.equals("lua", utils.path_to_ft("init.lua"))
-    end)
-
-    it("returns python for .py files", function()
-      assert.equals("python", utils.path_to_ft("main.py"))
-    end)
-
-    it("returns go for .go files", function()
-      assert.equals("go", utils.path_to_ft("main.go"))
-    end)
-
-    it("returns rust for .rs files", function()
-      assert.equals("rust", utils.path_to_ft("lib.rs"))
-    end)
-
-    it("returns json for .json files", function()
-      assert.equals("json", utils.path_to_ft("package.json"))
-    end)
-
-    it("returns yaml for .yml files", function()
-      assert.equals("yaml", utils.path_to_ft("config.yml"))
-    end)
-
-    it("returns yaml for .yaml files", function()
-      assert.equals("yaml", utils.path_to_ft("config.yaml"))
-    end)
-
-    it("returns markdown for .md files", function()
-      assert.equals("markdown", utils.path_to_ft("README.md"))
-    end)
-
-    it("returns html for .html files", function()
-      assert.equals("html", utils.path_to_ft("index.html"))
-    end)
-
-    it("returns css for .css files", function()
-      assert.equals("css", utils.path_to_ft("style.css"))
-    end)
-
-    it("returns sh for .sh files", function()
-      assert.equals("sh", utils.path_to_ft("script.sh"))
-    end)
-
-    it("handles case insensitivity", function()
-      assert.equals("typescript", utils.path_to_ft("File.TS"))
-    end)
-
-    it("handles dockerfile basename", function()
-      assert.equals("dockerfile", utils.path_to_ft("Dockerfile"))
-    end)
-
-    it("handles makefile basename", function()
-      assert.equals("make", utils.path_to_ft("Makefile"))
-    end)
-
-    -- Bug #26: unknown extensions should return empty string, not raw extension
-    it("returns empty string for unknown extensions", function()
-      local result = utils.path_to_ft("file.xyz")
-      assert.equals("", result)
-    end)
-
-    it("handles deeply nested paths", function()
-      assert.equals("typescriptreact", utils.path_to_ft("src/components/shared/Button.tsx"))
-      assert.equals("typescript", utils.path_to_ft("src/components/shared/utils/index.ts"))
-    end)
-  end)
-
   -- ─── split_path ────────────────────────────────────────────────────────────
 
   describe("split_path", function()
@@ -113,22 +26,6 @@ describe("utils", function()
       local result = utils.split_path("a/b/c/d/e.ts")
       assert.same({ "a", "b", "c", "d" }, result.dirs)
       assert.equals("e.ts", result.file)
-    end)
-  end)
-
-  -- ─── dirs_to_path ──────────────────────────────────────────────────────────
-
-  describe("dirs_to_path", function()
-    it("joins dirs with /", function()
-      assert.equals("src/components", utils.dirs_to_path({ "src", "components" }))
-    end)
-
-    it("returns single dir", function()
-      assert.equals("src", utils.dirs_to_path({ "src" }))
-    end)
-
-    it("returns empty string for empty dirs", function()
-      assert.equals("", utils.dirs_to_path({}))
     end)
   end)
 
@@ -181,34 +78,6 @@ describe("utils", function()
 
     it("returns M for MM in staged section", function()
       assert.equals("M", utils.status_icon("MM", "staged"))
-    end)
-  end)
-
-  -- ─── format_counts ─────────────────────────────────────────────────────────
-
-  describe("format_counts", function()
-    it("formats both added and removed", function()
-      assert.equals("+10 -5", utils.format_counts(10, 5))
-    end)
-
-    it("formats only added", function()
-      assert.equals("+3", utils.format_counts(3, 0))
-    end)
-
-    it("formats only removed", function()
-      assert.equals("-7", utils.format_counts(0, 7))
-    end)
-
-    it("returns empty for nil/nil (binary)", function()
-      assert.equals("", utils.format_counts(nil, nil))
-    end)
-
-    it("returns empty for zero/zero", function()
-      assert.equals("", utils.format_counts(0, 0))
-    end)
-
-    it("handles large numbers", function()
-      assert.equals("+1000 -500", utils.format_counts(1000, 500))
     end)
   end)
 

@@ -12,6 +12,7 @@ local state = require("git-diff-viewer.state")
 local git = require("git-diff-viewer.git")
 local utils = require("git-diff-viewer.utils")
 local panel = require("git-diff-viewer.ui.panel")
+local diff = require("git-diff-viewer.ui.diff")
 
 -- Set by init.lua after load_and_render is defined
 M.refresh = nil
@@ -24,10 +25,28 @@ local function get_section(key)
   end
 end
 
+-- Check if the currently viewed diff item still exists in any section.
+local function current_diff_still_exists()
+  if not state.current_diff or not state.current_diff.item then return true end
+  local path = state.current_diff.item.path
+  for _, sec in ipairs(state.sections) do
+    for _, item in ipairs(sec.items) do
+      if item.path == path then return true end
+    end
+  end
+  return false
+end
+
 -- Fire-and-forget: apply optimistic change, run git, then refresh on completion.
 local function fire_git(action_fn, git_fn)
   action_fn()
   panel.render()
+
+  -- Clear stale diff panes if the viewed file was removed by this operation
+  if not current_diff_still_exists() then
+    state.current_diff = nil
+    diff.show_empty()
+  end
 
   git_fn(function(ok, stderr)
     vim.schedule(function()
@@ -80,20 +99,13 @@ function M.stage_item(line)
     local item = line.item
     local paths = { item.path }
 
-    if item.section == "changes" or item.status == "untracked" then
+    if item.section == "changes" or item.section == "conflicts"
+       or item.status == "untracked" then
       fire_git(function()
-        remove_from_section(item.path, "changes")
+        remove_from_section(item.path, item.section)
         add_to_section("staged", vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
       end, function(cb)
-        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
-      end)
-
-    elseif item.section == "conflicts" then
-      fire_git(function()
-        remove_from_section(item.path, "conflicts")
-        add_to_section("staged", vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
-      end, function(cb)
-        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.stage(state.git_root, paths, cb)
       end)
     end
 
@@ -117,7 +129,7 @@ function M.stage_item(line)
         add_to_section("staged", vim.tbl_extend("force", item, { section = "staged", status = "staged" }))
       end
     end, function(cb)
-      git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+      git.stage(state.git_root, paths, cb)
     end)
 
   elseif line.type == "section_header" then
@@ -144,7 +156,7 @@ function M.stage_item(line)
         end
         src_sec.items = {}
       end, function(cb)
-        git.stage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.stage(state.git_root, paths, cb)
       end)
     end
   end
@@ -183,9 +195,9 @@ function M.unstage_item(line)
     end, function(cb)
       -- Bug #17 fix: empty repo can't use `git restore --staged`, use `git rm --cached`
       if not state.has_commits then
-        git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.rm_cached(state.git_root, paths, cb)
       else
-        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.unstage(state.git_root, paths, cb)
       end
     end)
 
@@ -207,9 +219,9 @@ function M.unstage_item(line)
       end
     end, function(cb)
       if not state.has_commits then
-        git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.rm_cached(state.git_root, paths, cb)
       else
-        git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.unstage(state.git_root, paths, cb)
       end
     end)
 
@@ -234,9 +246,9 @@ function M.unstage_item(line)
         staged_sec.items = {}
       end, function(cb)
         if not state.has_commits then
-          git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+          git.rm_cached(state.git_root, paths, cb)
         else
-          git.unstage(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+          git.unstage(state.git_root, paths, cb)
         end
       end)
     end
@@ -279,13 +291,13 @@ function M.discard_item(line)
             section = "changes", status = "untracked", xy = "??",
           }))
         end, function(cb)
-          git.rm_cached(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+          git.rm_cached(state.git_root, paths, cb)
         end)
       else
         fire_git(function()
           remove_from_section(item.path, "staged")
         end, function(cb)
-          git.checkout_head(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+          git.checkout_head(state.git_root, paths, cb)
         end)
       end
       return
@@ -296,7 +308,7 @@ function M.discard_item(line)
       fire_git(function()
         remove_from_section(item.path, "changes")
       end, function(cb)
-        git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.discard(state.git_root, paths, cb)
       end)
     end
 
@@ -323,7 +335,7 @@ function M.discard_item(line)
           remove_from_section(p, "changes")
         end
       end, function(cb)
-        git.discard(state.git_root, paths, function(ok, stderr) cb(ok, stderr) end)
+        git.discard(state.git_root, paths, cb)
       end)
     end)
   end
@@ -357,7 +369,7 @@ function M.stage_all()
       staged_sec.items = new_staged
     end
   end, function(cb)
-    git.stage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+    git.stage_all(state.git_root, cb)
   end)
 end
 
@@ -375,9 +387,9 @@ function M.unstage_all()
     end
   end, function(cb)
     if not state.has_commits then
-      git.rm_cached(state.git_root, { "." }, function(ok, stderr) cb(ok, stderr) end)
+      git.rm_cached(state.git_root, { "." }, cb)
     else
-      git.unstage_all(state.git_root, function(ok, stderr) cb(ok, stderr) end)
+      git.unstage_all(state.git_root, cb)
     end
   end)
 end

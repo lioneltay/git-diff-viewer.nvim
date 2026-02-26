@@ -16,7 +16,6 @@
 
 local state = require("git-diff-viewer.state")
 local git = require("git-diff-viewer.git")
-local utils = require("git-diff-viewer.utils")
 local layout = require("git-diff-viewer.ui.layout")
 local config = require("git-diff-viewer.config")
 
@@ -85,9 +84,9 @@ local function get_or_create_scratch(cache_key, path)
   vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   -- Name gives the buffer a meaningful identity (and preserves extension for icons)
   vim.api.nvim_buf_set_name(buf, expected_name)
-  -- Set filetype from extension — more reliable than `filetype detect` on scratch buffers
-  local ft = utils.path_to_ft(path)
-  if ft ~= "" then
+  -- Set filetype from path — vim.filetype.match handles extensions and special filenames
+  local ft = vim.filetype.match({ filename = path })
+  if ft then
     vim.api.nvim_set_option_value("filetype", ft, { buf = buf })
   end
 
@@ -253,6 +252,18 @@ local function disable_diff_mode(win)
   vim.api.nvim_set_option_value("scrollbind", false, { win = win })
   vim.api.nvim_set_option_value("cursorbind", false, { win = win })
   vim.api.nvim_set_option_value("foldmethod", "manual", { win = win })
+end
+
+-- Clear diff panes when the viewed file no longer exists (e.g., after discard).
+function M.show_empty()
+  local wins = layout.open_diff_wins(1)
+  local win = wins[1]
+  local buf = message_buf("No changes")
+  vim.api.nvim_win_set_buf(win, buf)
+  state.diff_bufs = { buf }
+  disable_diff_mode(win)
+  vim.api.nvim_set_option_value("winfixbuf", true, { win = win })
+  refocus_panel()
 end
 
 -- Display a single buffer in one diff window (no diff mode).
