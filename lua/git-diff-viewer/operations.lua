@@ -39,6 +39,8 @@ end
 
 -- Fire-and-forget: apply optimistic change, run git, then refresh on completion.
 local function fire_git(action_fn, git_fn)
+  -- Branch mode: stage/unstage/discard don't apply
+  if state.mode == "branch" then return end
   action_fn()
   panel.render()
 

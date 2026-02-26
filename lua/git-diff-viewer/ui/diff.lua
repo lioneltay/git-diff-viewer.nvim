@@ -374,6 +374,51 @@ function M.open(item)
     return
   end
 
+  -- Branch diff mode — compare working tree against target branch
+  if item.status == "branch_diff" then
+    local target = state.target_branch
+    local full_path = cwd .. "/" .. path
+
+    -- Added: single pane, working tree file
+    if xy == " A" then
+      local working_buf = vim.fn.bufnr(full_path, true)
+      load_for_diff(working_buf)
+      pin_buffer(working_buf)
+      show_single(working_buf)
+      return
+    end
+
+    -- Deleted: single pane, show from target branch
+    if xy == " D" then
+      local cache_key = target .. ":" .. path
+      local ref_buf = get_or_create_scratch(cache_key, path)
+      load_git_content(
+        function(cb) git.show_ref(cwd, target, path, cb) end,
+        ref_buf,
+        "(error loading " .. target .. " content)",
+        function() show_single(ref_buf) end
+      )
+      return
+    end
+
+    -- Modified or Renamed: side-by-side
+    local old_path = item.orig_path or path
+    local cache_key = target .. ":" .. old_path
+    local left_buf = get_or_create_scratch(cache_key, old_path)
+
+    local right_buf = vim.fn.bufnr(full_path, true)
+    load_for_diff(right_buf)
+    pin_buffer(right_buf)
+
+    load_git_content(
+      function(cb) git.show_ref(cwd, target, old_path, cb) end,
+      left_buf,
+      "(error loading " .. target .. " content)",
+      function() show_side_by_side(left_buf, right_buf) end
+    )
+    return
+  end
+
   -- Merge conflict — single editable pane (working file with raw markers)
   -- Bug #22 fix: removed explicit setup_diff_keymaps here — show_single handles it
   if section == "conflicts" then
@@ -596,6 +641,12 @@ function M.refresh_diff_bufs()
           path = cache_key:match("^:0:(.+)$")
           if path then
             git_fn = function(cb) git.show_staged(cwd, path, cb) end
+          else
+            -- Branch ref: "<ref>:<path>" (e.g. "main:src/app.ts")
+            local ref, ref_path = cache_key:match("^(.+):(.+)$")
+            if ref and ref_path then
+              git_fn = function(cb) git.show_ref(cwd, ref, ref_path, cb) end
+            end
           end
         end
         if git_fn then

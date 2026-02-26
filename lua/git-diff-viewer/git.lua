@@ -145,6 +145,72 @@ function M.rm_cached(cwd, paths, callback)
   end)
 end
 
+-- ─── Branch diff commands ────────────────────────────────────────────────────
+
+-- Detect the default branch (main or master).
+-- Tries: symbolic-ref of origin/HEAD → rev-parse main → rev-parse master
+-- callback(ok: boolean, branch: string)
+function M.detect_default_branch(cwd, callback)
+  run({ "git", "symbolic-ref", "refs/remotes/origin/HEAD" }, { cwd = cwd }, function(ok, stdout)
+    if ok then
+      -- "refs/remotes/origin/main" → "main"
+      local branch = vim.trim(stdout):match("[^/]+$")
+      if branch then
+        callback(true, branch)
+        return
+      end
+    end
+    -- Fallback: try "main"
+    run({ "git", "rev-parse", "--verify", "main" }, { cwd = cwd }, function(ok2)
+      if ok2 then
+        callback(true, "main")
+        return
+      end
+      -- Fallback: try "master"
+      run({ "git", "rev-parse", "--verify", "master" }, { cwd = cwd }, function(ok3)
+        if ok3 then
+          callback(true, "master")
+        else
+          callback(false, "main")
+        end
+      end)
+    end)
+  end)
+end
+
+-- Get file list with status (M/A/D/R) for branch diff.
+-- callback(ok: boolean, raw: string)
+function M.diff_branch_name_status(cwd, target, callback)
+  run({ "git", "diff", target, "--name-status", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
+    callback(ok, stdout)
+  end)
+end
+
+-- Get +/- counts for branch diff.
+-- callback(ok: boolean, raw: string)
+function M.diff_branch_numstat(cwd, target, callback)
+  run({ "git", "diff", target, "--numstat", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
+    callback(ok, stdout)
+  end)
+end
+
+-- Read a file from any ref (generalized show_head).
+-- ref: e.g. "main", "origin/develop", "HEAD"
+-- callback(ok: boolean, content: string)
+function M.show_ref(cwd, ref, path, callback)
+  run({ "git", "show", ref .. ":" .. path }, { cwd = cwd }, function(ok, stdout)
+    callback(ok, stdout)
+  end)
+end
+
+-- List all branch names (local + remote).
+-- callback(ok: boolean, raw: string)
+function M.list_branches(cwd, callback)
+  run({ "git", "branch", "-a", "--format=%(refname:short)" }, { cwd = cwd }, function(ok, stdout)
+    callback(ok, stdout)
+  end)
+end
+
 -- Stage all changes (equivalent to `git add -A`).
 -- callback(ok: boolean, stderr: string)
 function M.stage_all(cwd, callback)

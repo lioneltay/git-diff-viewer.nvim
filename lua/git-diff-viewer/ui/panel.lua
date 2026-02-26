@@ -114,6 +114,14 @@ local function build_lines(sections, opts)
     local path_line_idx = #text
     add({ type = "header" }, " " .. display_path)
     hl("GitDiffViewerDim", path_line_idx, 0, -1)
+    -- Branch mode: show target branch line
+    if state.mode == "branch" and state.target_branch then
+      local target_line_idx = #text
+      local target_text = " Target: " .. state.target_branch
+      add({ type = "header" }, target_text)
+      hl("GitDiffViewerSectionHeader", target_line_idx, 0, -1)
+    end
+
     local hint_line_idx = #text
     add({ type = "header" }, " Help: g?")
     hl("GitDiffViewerDim", hint_line_idx, 0, -1)
@@ -465,36 +473,47 @@ function M.create_buf()
     end
   end, "Open diff / toggle folder / toggle section")
 
-  -- Stage
-  map(km.stage, function()
-    local line = current_line()
-    if not line then return end
-    require("git-diff-viewer.operations").stage_item(line)
-  end, "Stage file/folder")
+  -- Stage/unstage/discard keymaps — only in status mode
+  if state.mode ~= "branch" then
+    -- Stage
+    map(km.stage, function()
+      local line = current_line()
+      if not line then return end
+      require("git-diff-viewer.operations").stage_item(line)
+    end, "Stage file/folder")
 
-  -- Unstage
-  map(km.unstage, function()
-    local line = current_line()
-    if not line then return end
-    require("git-diff-viewer.operations").unstage_item(line)
-  end, "Unstage file/folder")
+    -- Unstage
+    map(km.unstage, function()
+      local line = current_line()
+      if not line then return end
+      require("git-diff-viewer.operations").unstage_item(line)
+    end, "Unstage file/folder")
 
-  -- Discard
-  map(km.discard, function()
-    local line = current_line()
-    if not line then return end
-    require("git-diff-viewer.operations").discard_item(line)
-  end, "Discard file/folder")
+    -- Discard
+    map(km.discard, function()
+      local line = current_line()
+      if not line then return end
+      require("git-diff-viewer.operations").discard_item(line)
+    end, "Discard file/folder")
 
-  -- Stage all
-  map(km.stage_all, function()
-    require("git-diff-viewer.operations").stage_all()
-  end, "Stage all")
+    -- Stage all
+    map(km.stage_all, function()
+      require("git-diff-viewer.operations").stage_all()
+    end, "Stage all")
 
-  -- Unstage all
-  map(km.unstage_all, function()
-    require("git-diff-viewer.operations").unstage_all()
-  end, "Unstage all")
+    -- Unstage all
+    map(km.unstage_all, function()
+      require("git-diff-viewer.operations").unstage_all()
+    end, "Unstage all")
+  end
+
+  -- Branch mode: change target branch
+  if state.mode == "branch" then
+    local bk = config.options.branch_keymaps
+    map(bk.change_branch, function()
+      require("git-diff-viewer.ui.branch_picker").open()
+    end, "Change target branch")
+  end
 
   -- Tab/S-Tab: cycle to next/previous file
   map(km.next_file, function()
@@ -517,33 +536,62 @@ function M.create_buf()
 
   -- Help popup
   map("g?", function()
-    local lines = {
-      "  Git Diff Viewer",
-      "",
-      "  Panel",
-      "  <CR>       open diff / toggle folder / toggle section",
-      "  s          stage file or folder",
-      "  u          unstage file or folder",
-      "  S          stage all",
-      "  U          unstage all",
-      "  x          discard changes",
-      "  <Tab>      next file",
-      "  <S-Tab>    previous file",
-      "  gf         open file in previous tab",
-      "  <C-l>      focus diff pane",
-      "  <leader>ff fuzzy find changed files",
-      "  R          refresh",
-      "  q          close",
-      "",
-      "  Diff pane",
-      "  q          close diff",
-      "  gf         open file in previous tab",
-      "  <C-h>      focus panel",
-      "  <leader>ff fuzzy find changed files",
-      "  <leader>fb browse viewed diffs",
-      "",
-      "  Press q or <Esc> to close",
-    }
+    local help_lines
+    if state.mode == "branch" then
+      help_lines = {
+        "  Git Diff Viewer (Branch Mode)",
+        "  Target: " .. (state.target_branch or "?"),
+        "",
+        "  Panel",
+        "  <CR>       open diff / toggle folder / toggle section",
+        "  b          change target branch",
+        "  <Tab>      next file",
+        "  <S-Tab>    previous file",
+        "  gf         open file in previous tab",
+        "  <C-l>      focus diff pane",
+        "  <leader>ff fuzzy find changed files",
+        "  R          refresh",
+        "  q          close",
+        "",
+        "  Diff pane",
+        "  q          close diff",
+        "  gf         open file in previous tab",
+        "  <C-h>      focus panel",
+        "  <leader>ff fuzzy find changed files",
+        "  <leader>fb browse viewed diffs",
+        "",
+        "  Press q or <Esc> to close",
+      }
+    else
+      help_lines = {
+        "  Git Diff Viewer",
+        "",
+        "  Panel",
+        "  <CR>       open diff / toggle folder / toggle section",
+        "  s          stage file or folder",
+        "  u          unstage file or folder",
+        "  S          stage all",
+        "  U          unstage all",
+        "  x          discard changes",
+        "  <Tab>      next file",
+        "  <S-Tab>    previous file",
+        "  gf         open file in previous tab",
+        "  <C-l>      focus diff pane",
+        "  <leader>ff fuzzy find changed files",
+        "  R          refresh",
+        "  q          close",
+        "",
+        "  Diff pane",
+        "  q          close diff",
+        "  gf         open file in previous tab",
+        "  <C-h>      focus panel",
+        "  <leader>ff fuzzy find changed files",
+        "  <leader>fb browse viewed diffs",
+        "",
+        "  Press q or <Esc> to close",
+      }
+    end
+    local lines = help_lines
     local width = 54
     local height = #lines
     local row = math.floor((vim.o.lines - height) / 2)

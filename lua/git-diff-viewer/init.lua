@@ -169,7 +169,11 @@ end
 
 -- Wire the refresh callback so operations can trigger load_and_render
 operations.refresh = function()
-  M.load_and_render()
+  if state.mode == "branch" then
+    M.load_and_render_branch()
+  else
+    M.load_and_render()
+  end
 end
 
 -- ─── Autocmd lifecycle ──────────────────────────────────────────────────────
@@ -189,7 +193,11 @@ debounced_refresh = function()
   refresh_timer = vim.defer_fn(function()
     refresh_timer = nil
     if state.is_active() then
-      M.load_and_render()
+      if state.mode == "branch" then
+        M.load_and_render_branch()
+      else
+        M.load_and_render()
+      end
     end
   end, 200)
 end
@@ -422,6 +430,11 @@ end
 -- ─── Open ─────────────────────────────────────────────────────────────────────
 
 function M.open()
+  -- Mutual exclusion: close branch mode if active
+  if state.is_active() and state.mode == "branch" then
+    M.close()
+  end
+
   -- Single-instance: focus existing tab if it is still open
   if layout.focus() then return end
 
@@ -440,6 +453,7 @@ function M.open()
       state.reset()
       state.git_root = root
       state.origin_tab = origin_tab
+      state.mode = "status"
 
       git.has_commits(root, function(has)
         vim.schedule(function()
@@ -463,6 +477,155 @@ function M.open()
           M.load_and_render()
         end)
       end)
+    end)
+  end)
+end
+
+-- ─── Branch diff mode ──────────────────────────────────────────────────────
+
+-- Fetch branch diff data and render panel (branch mode equivalent of load_and_render).
+function M.load_and_render_branch()
+  refresh_in_flight = true
+  local cwd = state.git_root
+  local target = state.target_branch
+  local gen = state.next_generation()
+
+  local name_status_raw = nil
+  local numstat_raw = nil
+  local errors = {}
+  local pending = 2
+
+  local function try_render()
+    pending = pending - 1
+    if pending > 0 then return end
+
+    refresh_in_flight = false
+
+    if state.generation ~= gen then return end
+
+    if #errors > 0 then
+      utils.error("Git error: " .. table.concat(errors, "; "))
+      return
+    end
+
+    if not state.is_active() then return end
+
+    local name_status_entries = parse.parse_name_status(name_status_raw or "")
+    local numstat = parse.parse_numstat(numstat_raw or "")
+
+    local files = parse.build_branch_file_list(name_status_entries, numstat)
+    state.sections = {
+      { key = "changes", label = "Changes", items = files.changes },
+    }
+    reconcile_current_diff()
+    reconcile_viewed_diffs()
+    panel.render()
+    if not state.current_diff and #(state.diff_bufs or {}) > 0 then
+      diff.show_empty()
+    else
+      diff.refresh_diff_bufs()
+    end
+  end
+
+  git.diff_branch_name_status(cwd, target, function(ok, raw)
+    vim.schedule(function()
+      if not ok then
+        table.insert(errors, "branch name-status: " .. (raw or "unknown"))
+      else
+        name_status_raw = raw
+      end
+      try_render()
+    end)
+  end)
+
+  git.diff_branch_numstat(cwd, target, function(ok, raw)
+    vim.schedule(function()
+      if not ok then
+        table.insert(errors, "branch numstat: " .. (raw or "unknown"))
+      else
+        numstat_raw = raw
+      end
+      try_render()
+    end)
+  end)
+end
+
+-- Open branch diff viewer.
+-- target_arg: optional branch name (e.g. "main"). If nil, auto-detects default branch.
+function M.open_branch(target_arg)
+  -- Mutual exclusion: close status mode if active
+  if state.is_active() and state.mode == "status" then
+    M.close()
+  end
+
+  -- Already in branch mode with same target — just focus
+  if state.is_active() and state.mode == "branch" then
+    if target_arg and target_arg ~= state.target_branch then
+      -- Different target: update and refresh
+      state.target_branch = target_arg
+      state.buf_cache = {}
+      M.load_and_render_branch()
+      return
+    end
+    layout.focus()
+    return
+  end
+
+  local cwd = vim.fn.getcwd()
+  local origin_tab = vim.api.nvim_get_current_tabpage()
+
+  git.get_root(cwd, function(ok, root)
+    vim.schedule(function()
+      if not ok then
+        utils.error("Not inside a git repository")
+        return
+      end
+
+      local function start_branch_viewer(target)
+        -- Validate the target ref exists
+        vim.system({ "git", "rev-parse", "--verify", target }, {
+          cwd = root,
+          text = true,
+        }, function(result)
+          vim.schedule(function()
+            if result.code ~= 0 then
+              utils.error("Branch not found: " .. target)
+              return
+            end
+
+            state.reset()
+            state.git_root = root
+            state.origin_tab = origin_tab
+            state.mode = "branch"
+            state.target_branch = target
+            state.has_commits = true -- branch diff implies commits exist
+
+            -- Build UI
+            layout.create_tab()
+            local buf = panel.create_buf()
+            layout.set_panel_buf(buf)
+
+            if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
+              vim.api.nvim_set_current_win(state.panel_win)
+            end
+
+            setup_autocmds()
+            setup_watchers()
+            M.load_and_render_branch()
+          end)
+        end)
+      end
+
+      if target_arg then
+        start_branch_viewer(target_arg)
+      else
+        -- Auto-detect default branch
+        git.detect_default_branch(root, function(det_ok, branch)
+          vim.schedule(function()
+            start_branch_viewer(det_ok and branch or "main")
+          end)
+        end)
+      end
     end)
   end)
 end
@@ -499,7 +662,11 @@ function M.refresh()
     end
   end
   state.buf_cache = preserved
-  M.load_and_render()
+  if state.mode == "branch" then
+    M.load_and_render_branch()
+  else
+    M.load_and_render()
+  end
 end
 
 -- ─── Tab/S-Tab file cycling ───────────────────────────────────────────────────
@@ -544,5 +711,9 @@ end, { desc = "Open Git Diff Viewer" })
 vim.api.nvim_create_user_command("GitDiffViewerClose", function()
   M.close()
 end, { desc = "Close Git Diff Viewer" })
+
+vim.api.nvim_create_user_command("GitDiffViewerBranch", function(opts)
+  M.open_branch(opts.args ~= "" and opts.args or nil)
+end, { nargs = "?", desc = "Open Git Diff Viewer (branch mode)" })
 
 return M

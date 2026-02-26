@@ -27,6 +27,11 @@ M.defaults = {
     open_file = "gf",
     focus_panel = "<C-h>",
   },
+
+  -- Keymaps for branch mode panel
+  branch_keymaps = {
+    change_branch = "b",
+  },
 }
 
 -- Merged config (defaults + user opts); set by setup()

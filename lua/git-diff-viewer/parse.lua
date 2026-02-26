@@ -137,23 +137,132 @@ function M.parse_numstat(raw)
     local line = parts[i]
 
     -- Each entry: "<added>\t<removed>\t<path>"
-    local added_s, removed_s, path = line:match("^([^\t]+)\t([^\t]+)\t(.+)$")
+    -- Renames with -M flag: "<added>\t<removed>\t" (empty path), next two NUL tokens are old_path and new_path
+    local added_s, removed_s, path = line:match("^([^\t]+)\t([^\t]+)\t(.*)$")
 
-    if path then
-      -- Renames in numstat are shown as "{old => new}" or "old_path" + next NUL token
-      -- For simplicity, use the path as-is (the key in our map)
+    if added_s then
       local is_binary = added_s == "-" and removed_s == "-"
-      result[path] = {
-        added = is_binary and nil or tonumber(added_s),
-        removed = is_binary and nil or tonumber(removed_s),
-        binary = is_binary,
-      }
+      if path == "" then
+        -- Rename: consume next two tokens (old_path, new_path)
+        local old_path = parts[i + 1]
+        local new_path = parts[i + 2]
+        if old_path and new_path then
+          result[new_path] = {
+            added = is_binary and nil or tonumber(added_s),
+            removed = is_binary and nil or tonumber(removed_s),
+            binary = is_binary,
+          }
+          i = i + 2
+        end
+      else
+        result[path] = {
+          added = is_binary and nil or tonumber(added_s),
+          removed = is_binary and nil or tonumber(removed_s),
+          binary = is_binary,
+        }
+      end
     end
 
     i = i + 1
   end
 
   return result
+end
+
+-- ─── Branch diff parsers ─────────────────────────────────────────────────────
+
+-- Parse `git diff --name-status -z -M` output.
+--
+-- Format (NUL-separated):
+--   Normal:  "<status>\0<path>\0"
+--   Rename:  "R<score>\0<new_path>\0<old_path>\0"
+--
+-- Returns a list of entries:
+--   { status_char = "M"|"A"|"D"|"R", path = string, orig_path = string|nil }
+function M.parse_name_status(raw)
+  local entries = {}
+
+  if not raw or raw == "" then
+    return entries
+  end
+
+  local raw_parts = vim.split(raw, "\0", { plain = true })
+  local parts = {}
+  for _, part in ipairs(raw_parts) do
+    if part ~= "" then
+      table.insert(parts, part)
+    end
+  end
+
+  local i = 1
+  while i <= #parts do
+    local token = parts[i]
+    -- Status is one char (M/A/D) or R followed by a score (e.g. R100)
+    local status_char = token:sub(1, 1)
+
+    if status_char == "R" then
+      -- Rename: next token is new_path, then old_path
+      local new_path = parts[i + 1]
+      local old_path = parts[i + 2]
+      if new_path and old_path then
+        table.insert(entries, {
+          status_char = "R",
+          path = new_path,
+          orig_path = old_path,
+        })
+      end
+      i = i + 3
+    else
+      -- M, A, D: next token is path
+      local path = parts[i + 1]
+      if path then
+        table.insert(entries, {
+          status_char = status_char,
+          path = path,
+          orig_path = nil,
+        })
+      end
+      i = i + 2
+    end
+  end
+
+  return entries
+end
+
+-- Build file list for branch diff mode from name-status entries and numstat.
+--
+-- Maps status chars to xy codes for utils.status_icon() compatibility:
+--   M → " M", A → " A", D → " D", R → "R "
+--
+-- Returns { changes = [...] }
+function M.build_branch_file_list(name_status_entries, numstat)
+  local changes = {}
+
+  local xy_map = {
+    M = " M",
+    A = " A",
+    D = " D",
+    R = "R ",
+  }
+
+  for _, entry in ipairs(name_status_entries) do
+    local xy = xy_map[entry.status_char] or " M"
+    local ns = numstat[entry.path] or {}
+
+    table.insert(changes, {
+      xy = xy,
+      path = entry.path,
+      orig_path = entry.orig_path,
+      status = "branch_diff",
+      section = "changes",
+      added = ns.added,
+      removed = ns.removed,
+      binary = ns.binary or false,
+      submodule = false,
+    })
+  end
+
+  return { changes = changes }
 end
 
 -- Build file list sections from parsed status entries and numstat maps.

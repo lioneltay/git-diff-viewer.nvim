@@ -24,6 +24,12 @@ function M.reset()
     pcall(vim.api.nvim_buf_delete, M.panel_buf, { force = true })
   end
 
+  -- Viewer mode: "status" (default git status diff) or "branch" (branch comparison)
+  M.mode = nil
+
+  -- Target branch for branch mode (e.g., "main", "origin/develop")
+  M.target_branch = nil
+
   -- Git root directory for the current session
   M.git_root = nil
 

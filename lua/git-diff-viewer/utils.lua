@@ -107,4 +107,13 @@ function M.fuzzy_match(str, query)
   return true
 end
 
+-- Fuzzy filter and sort: returns items sorted by match quality using Vim's built-in scorer.
+-- items: list of strings to filter
+-- query: search string
+-- Returns a new list of matching strings, best matches first.
+function M.fuzzy_filter(items, query)
+  if query == "" then return items end
+  return vim.fn.matchfuzzy(items, query)
+end
+
 return M
