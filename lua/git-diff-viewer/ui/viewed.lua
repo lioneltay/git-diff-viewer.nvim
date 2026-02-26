@@ -37,7 +37,7 @@ function M.open()
   end
 
   -- Dimensions
-  local width = math.min(80, vim.o.columns - 4)
+  local width = math.min(120, vim.o.columns - 4)
   local height = math.min(#items + 2, vim.o.lines - 6)
   local row = math.floor((vim.o.lines - height) / 2)
   local col = math.floor((vim.o.columns - width) / 2)
@@ -53,24 +53,46 @@ function M.open()
     local line = "  " .. status_char .. "  " .. item.path .. section_label
     table.insert(lines, line)
 
-    -- Status highlight
     local line_idx = i - 1
+    local path_start = 2 + #status_char + 2
+
+    -- Status highlight
     table.insert(highlights, {
       line = line_idx,
       group = utils.get_status_hl(status_char),
       col_start = 2,
       col_end = 2 + #status_char,
     })
-    -- Path highlight
-    table.insert(highlights, {
-      line = line_idx,
-      group = "GitDiffViewerFileName",
-      col_start = 2 + #status_char + 2,
-      col_end = 2 + #status_char + 2 + #item.path,
-    })
+
+    -- Split path into folder prefix and filename
+    local folder, filename = item.path:match("^(.+/)([^/]+)$")
+    if folder then
+      -- Dim folder prefix, bold filename
+      table.insert(highlights, {
+        line = line_idx,
+        group = "GitDiffViewerDim",
+        col_start = path_start,
+        col_end = path_start + #folder,
+      })
+      table.insert(highlights, {
+        line = line_idx,
+        group = "GitDiffViewerFileName",
+        col_start = path_start + #folder,
+        col_end = path_start + #item.path,
+      })
+    else
+      -- Root-level file
+      table.insert(highlights, {
+        line = line_idx,
+        group = "GitDiffViewerFileName",
+        col_start = path_start,
+        col_end = path_start + #item.path,
+      })
+    end
+
     -- Section label highlight
     if section_label ~= "" then
-      local label_start = 2 + #status_char + 2 + #item.path
+      local label_start = path_start + #item.path
       table.insert(highlights, {
         line = line_idx,
         group = "GitDiffViewerDim",
