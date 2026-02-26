@@ -183,6 +183,15 @@ local function setup_diff_keymaps(buf)
     end
   end, "Focus file panel")
 
+  -- Diff hunk navigation — explicit maps so which-key/mini.bracketed don't intercept.
+  -- Map both ]c (native) and ]h (gitsigns convention) for muscle memory compatibility.
+  local function next_hunk() pcall(vim.cmd, "normal! ]c") end
+  local function prev_hunk() pcall(vim.cmd, "normal! [c") end
+  map("]c", next_hunk, "Next diff hunk")
+  map("[c", prev_hunk, "Previous diff hunk")
+  map("]h", next_hunk, "Next diff hunk")
+  map("[h", prev_hunk, "Previous diff hunk")
+
   -- Viewed diffs picker
   map("<leader>fb", function()
     require("git-diff-viewer.ui.viewed").open()
@@ -204,6 +213,10 @@ local function cleanup_diff_keymaps(buf)
   pcall(vim.keymap.del, "n", dk.close, { buffer = buf })
   pcall(vim.keymap.del, "n", dk.open_file, { buffer = buf })
   pcall(vim.keymap.del, "n", dk.focus_panel, { buffer = buf })
+  pcall(vim.keymap.del, "n", "]c", { buffer = buf })
+  pcall(vim.keymap.del, "n", "[c", { buffer = buf })
+  pcall(vim.keymap.del, "n", "]h", { buffer = buf })
+  pcall(vim.keymap.del, "n", "[h", { buffer = buf })
   pcall(vim.keymap.del, "n", "<leader>fb", { buffer = buf })
   pcall(vim.keymap.del, "n", "<leader>ff", { buffer = buf })
 end
