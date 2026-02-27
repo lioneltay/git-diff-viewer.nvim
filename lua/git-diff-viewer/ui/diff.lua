@@ -151,11 +151,34 @@ local function enable_diff_mode(win)
 end
 
 -- Set up keymaps in a diff buffer, tracking for cleanup.
+-- Keymaps are guarded: they only fire when the current tab is the diff viewer
+-- tab. On other tabs the original key sequence is fed back so normal mappings
+-- work. This prevents plugin keymaps leaking into normal editing when a real
+-- file buffer is shared across tabs.
 local function setup_diff_keymaps(buf)
   local dk = config.options.diff_keymaps
 
   local function map(key, fn, desc)
-    vim.keymap.set("n", key, fn, { buffer = buf, desc = desc, nowait = true })
+    local wrapper
+    wrapper = function()
+      if state.tab and vim.api.nvim_tabpage_is_valid(state.tab)
+        and vim.api.nvim_get_current_tabpage() == state.tab then
+        fn()
+      else
+        -- Not on the diff tab — temporarily remove this mapping and replay
+        -- the key so the user's normal mapping fires, then restore ours.
+        pcall(vim.keymap.del, "n", key, { buffer = buf })
+        vim.api.nvim_feedkeys(
+          vim.api.nvim_replace_termcodes(key, true, false, true), "m", false
+        )
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            vim.keymap.set("n", key, wrapper, { buffer = buf, desc = desc, nowait = true })
+          end
+        end)
+      end
+    end
+    vim.keymap.set("n", key, wrapper, { buffer = buf, desc = desc, nowait = true })
   end
 
   map(dk.close, function()
