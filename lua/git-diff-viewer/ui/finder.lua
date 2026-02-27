@@ -133,6 +133,11 @@ function M.open()
     if line and line.type == "file" then
       close()
       diff.open(line.item)
+      -- Focus the diff pane instead of leaving focus on the explorer panel
+      local dw = state.diff_wins or {}
+      if dw[1] and vim.api.nvim_win_is_valid(dw[1]) then
+        vim.api.nvim_set_current_win(dw[1])
+      end
     end
   end
 
