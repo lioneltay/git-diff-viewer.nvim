@@ -723,4 +723,8 @@ vim.api.nvim_create_user_command("GitDiffViewerBranch", function(opts)
   M.open_branch(opts.args ~= "" and opts.args or nil)
 end, { nargs = "?", desc = "Open Git Diff Viewer (branch mode)" })
 
+vim.api.nvim_create_user_command("GitDiffViewerPRs", function()
+  require("git-diff-viewer.ui.pr_picker").open()
+end, { desc = "Open PR picker" })
+
 return M

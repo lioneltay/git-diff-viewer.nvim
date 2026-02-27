@@ -72,6 +72,8 @@ function M.setup_highlights()
     GitDiffViewerInsertions     = "diffAdded",
     GitDiffViewerDeletions      = "diffRemoved",
     GitDiffViewerDim            = "Comment",
+    GitDiffViewerPrNumber       = "Comment",
+    GitDiffViewerPrAuthor       = "Label",
   }
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
