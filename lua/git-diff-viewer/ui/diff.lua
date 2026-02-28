@@ -262,8 +262,10 @@ end
 
 -- ─── Single-pane display ──────────────────────────────────────────────────────
 
--- Restore focus to the panel window.
+-- Restore focus to the panel window (only if we're on the diff tab).
 local function refocus_panel()
+  if not state.tab or not vim.api.nvim_tabpage_is_valid(state.tab) then return end
+  if vim.api.nvim_get_current_tabpage() ~= state.tab then return end
   if state.panel_win and vim.api.nvim_win_is_valid(state.panel_win) then
     vim.api.nvim_set_current_win(state.panel_win)
   end

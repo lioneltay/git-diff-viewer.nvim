@@ -126,10 +126,16 @@ function M.load_and_render()
     reconcile_current_diff()
     reconcile_viewed_diffs()
     panel.render()
-    if not state.current_diff and #(state.diff_bufs or {}) > 0 then
-      diff.show_empty()
-    else
-      diff.refresh_diff_bufs()
+    -- Only touch diff windows if we're on the diff tab — background refreshes
+    -- (e.g. from FocusGained) must not steal focus to the diff tab.
+    local on_diff_tab = state.tab and vim.api.nvim_tabpage_is_valid(state.tab)
+      and vim.api.nvim_get_current_tabpage() == state.tab
+    if on_diff_tab then
+      if not state.current_diff and #(state.diff_bufs or {}) > 0 then
+        diff.show_empty()
+      else
+        diff.refresh_diff_bufs()
+      end
     end
   end
 
@@ -527,10 +533,16 @@ function M.load_and_render_branch()
     reconcile_current_diff()
     reconcile_viewed_diffs()
     panel.render()
-    if not state.current_diff and #(state.diff_bufs or {}) > 0 then
-      diff.show_empty()
-    else
-      diff.refresh_diff_bufs()
+    -- Only touch diff windows if we're on the diff tab — background refreshes
+    -- (e.g. from FocusGained) must not steal focus to the diff tab.
+    local on_diff_tab = state.tab and vim.api.nvim_tabpage_is_valid(state.tab)
+      and vim.api.nvim_get_current_tabpage() == state.tab
+    if on_diff_tab then
+      if not state.current_diff and #(state.diff_bufs or {}) > 0 then
+        diff.show_empty()
+      else
+        diff.refresh_diff_bufs()
+      end
     end
   end
 
