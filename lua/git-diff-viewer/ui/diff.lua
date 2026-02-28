@@ -145,7 +145,6 @@ local function enable_diff_mode(win)
   vim.api.nvim_set_option_value("diff", true, { win = win })
   vim.api.nvim_set_option_value("scrollbind", true, { win = win })
   vim.api.nvim_set_option_value("cursorbind", true, { win = win })
-  vim.api.nvim_set_option_value("wrap", false, { win = win })
   vim.api.nvim_set_option_value("foldmethod", "diff", { win = win })
   vim.api.nvim_set_option_value("foldlevel", 999, { win = win }) -- show all
 end
