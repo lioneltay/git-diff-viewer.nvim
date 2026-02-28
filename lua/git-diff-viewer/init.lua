@@ -411,11 +411,11 @@ local function setup_watchers()
   local git_dir = root .. "/.git"
 
   -- Helper: start a directory watcher with an optional filename filter.
-  local function watch_dir(dir, filter_fn)
+  local function watch_dir(dir, flags, filter_fn)
     local watcher = vim.uv.new_fs_event()
     if not watcher then return end
     local ok = pcall(function()
-      watcher:start(dir, {}, function(err, filename)
+      watcher:start(dir, flags or {}, function(err, filename)
         if err then return end
         if filter_fn and not filter_fn(filename) then return end
         watcher_refresh()
@@ -429,7 +429,7 @@ local function setup_watchers()
   end
 
   -- Watch .git/ directory for index and HEAD changes (staging, branch switch)
-  watch_dir(git_dir, function(filename)
+  watch_dir(git_dir, nil, function(filename)
     return filename == "index" or filename == "HEAD"
   end)
 
@@ -438,6 +438,14 @@ local function setup_watchers()
   if vim.fn.isdirectory(refs_dir) == 1 then
     watch_dir(refs_dir)
   end
+
+  -- Watch working directory recursively for new/deleted/modified files.
+  -- Recursive flag uses FSEvents on macOS which handles this efficiently.
+  -- Filter out .git/ changes (already handled above).
+  watch_dir(root, { recursive = true }, function(filename)
+    if not filename then return true end
+    return not vim.startswith(filename, ".git")
+  end)
 end
 
 -- ─── Open ─────────────────────────────────────────────────────────────────────
