@@ -396,6 +396,10 @@ function M.open(item)
   state.current_diff = { item = item }
   track_viewed(item)
 
+  -- Capture reference for staleness detection in async callbacks.
+  -- Each call creates a new table, so ~= detects if another open() ran since.
+  local my_diff = state.current_diff
+
   local cwd = state.git_root
   local path = item.path
   local xy = item.xy
@@ -438,7 +442,10 @@ function M.open(item)
         function(cb) git.show_ref(cwd, ref, path, cb) end,
         ref_buf,
         "(error loading base content)",
-        function() show_single(ref_buf) end
+        function()
+          if state.current_diff ~= my_diff then return end
+          show_single(ref_buf)
+        end
       )
       return
     end
@@ -456,7 +463,10 @@ function M.open(item)
       function(cb) git.show_ref(cwd, ref, old_path, cb) end,
       left_buf,
       "(error loading base content)",
-      function() show_side_by_side(left_buf, right_buf) end
+      function()
+        if state.current_diff ~= my_diff then return end
+        show_side_by_side(left_buf, right_buf)
+      end
     )
     return
   end
@@ -495,7 +505,10 @@ function M.open(item)
       function(cb) git.show_staged(cwd, path, cb) end,
       staged_buf,
       "(error loading staged content)",
-      function() show_single(staged_buf) end
+      function()
+        if state.current_diff ~= my_diff then return end
+        show_single(staged_buf)
+      end
     )
     return
   end
@@ -513,7 +526,10 @@ function M.open(item)
       function(cb) git.show_head(cwd, path, cb) end,
       head_buf,
       "(error loading HEAD content)",
-      function() show_single(head_buf) end
+      function()
+        if state.current_diff ~= my_diff then return end
+        show_single(head_buf)
+      end
     )
     return
   end
@@ -542,7 +558,10 @@ function M.open(item)
       function(cb) git.show_staged(cwd, path, cb) end,
       left_buf,
       "(error loading staged content)",
-      function() show_side_by_side(left_buf, right_buf) end
+      function()
+        if state.current_diff ~= my_diff then return end
+        show_side_by_side(left_buf, right_buf)
+      end
     )
     return
   end
@@ -564,6 +583,7 @@ function M.open(item)
     local function done()
       pending = pending - 1
       if pending == 0 then
+        if state.current_diff ~= my_diff then return end
         show_side_by_side(left_buf, right_buf)
       end
     end
@@ -602,6 +622,7 @@ function M.open(item)
     local function done()
       pending = pending - 1
       if pending == 0 then
+        if state.current_diff ~= my_diff then return end
         show_side_by_side(left_buf, right_buf)
       end
     end
@@ -642,7 +663,10 @@ function M.open(item)
     function(cb) git.show_head(cwd, old_path, cb) end,
     left_buf,
     "(error loading HEAD content)",
-    function() show_side_by_side(left_buf, right_buf) end
+    function()
+      if state.current_diff ~= my_diff then return end
+      show_side_by_side(left_buf, right_buf)
+    end
   )
 end
 
