@@ -258,6 +258,12 @@ local function setup_autocmds()
   -- inheriting diff, the proactive disable is no longer needed.
 
   local function restore_diff_wins()
+    -- Skip if a floating window is focused (e.g. picker/popup is open).
+    -- Running diffupdate while a picker is active disrupts its cursor.
+    local cur = vim.api.nvim_get_current_win()
+    local ok, cfg = pcall(vim.api.nvim_win_get_config, cur)
+    if ok and cfg.relative and cfg.relative ~= "" then return end
+
     local dw = state.diff_wins or {}
     if #dw < 2 then return end
     for _, w in ipairs(dw) do

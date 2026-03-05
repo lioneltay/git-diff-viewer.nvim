@@ -27,15 +27,7 @@ local M = {}
 -- Already-loaded buffers are a no-op — they keep their existing watchers.
 local function load_for_diff(buf)
   if vim.api.nvim_buf_is_loaded(buf) then return end
-  local ei = vim.o.eventignore
-  vim.o.eventignore = (ei == "" and "BufReadPost" or (ei .. ",BufReadPost"))
   vim.fn.bufload(buf)
-  vim.o.eventignore = ei
-  -- Manually detect filetype since BufReadPost was suppressed
-  if vim.bo[buf].filetype == "" then
-    local ft = vim.filetype.match({ buf = buf })
-    if ft then vim.bo[buf].filetype = ft end
-  end
 end
 
 -- Ensure a real file buffer stays loaded when hidden from diff windows.
@@ -223,6 +215,35 @@ local function setup_diff_keymaps(buf)
     require("git-diff-viewer.ui.finder").open()
   end, "Find changed files")
 
+  -- LSP navigation — open file in origin tab then trigger the action there.
+  -- Diff panes have winfixbuf so LSP can't navigate within them; instead we
+  -- jump to the real file in the editing tab and run the LSP command there.
+  local lsp_actions = {
+    gd = "lua vim.lsp.buf.definition()",
+    gD = "lua vim.lsp.buf.declaration()",
+    gr = "lua vim.lsp.buf.references()",
+    gy = "lua vim.lsp.buf.type_definition()",
+  }
+  for key, cmd in pairs(lsp_actions) do
+    map(key, function()
+      local item = state.current_diff and state.current_diff.item
+      if not item then return end
+      local full_path = state.git_root .. "/" .. item.path
+      -- Remember cursor position in the diff pane
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      -- Switch to origin tab and open the file
+      if state.origin_tab and vim.api.nvim_tabpage_is_valid(state.origin_tab) then
+        vim.api.nvim_set_current_tabpage(state.origin_tab)
+      else
+        vim.cmd("tabprevious")
+      end
+      vim.cmd("edit " .. vim.fn.fnameescape(full_path))
+      -- Restore cursor position and trigger LSP action
+      pcall(vim.api.nvim_win_set_cursor, 0, cursor)
+      vim.cmd(cmd)
+    end, "LSP " .. key .. " in origin tab")
+  end
+
   -- Track for cleanup (Bug #11: keymaps on real file buffers must be removed on close)
   state.keymap_bufs[buf] = true
 end
@@ -240,6 +261,10 @@ local function cleanup_diff_keymaps(buf)
   pcall(vim.keymap.del, "n", "[h", { buffer = buf })
   pcall(vim.keymap.del, "n", "<leader>fb", { buffer = buf })
   pcall(vim.keymap.del, "n", "<leader>ff", { buffer = buf })
+  pcall(vim.keymap.del, "n", "gd", { buffer = buf })
+  pcall(vim.keymap.del, "n", "gD", { buffer = buf })
+  pcall(vim.keymap.del, "n", "gr", { buffer = buf })
+  pcall(vim.keymap.del, "n", "gy", { buffer = buf })
 end
 
 -- Remove diff keymaps from all tracked buffers. Called on viewer close.
@@ -307,10 +332,7 @@ local function show_single(buf)
   -- Clear any lingering diff mode settings from previous side-by-side diff
   disable_diff_mode(win)
 
-  -- Lock window to this buffer — prevents IDE bridge / external plugins
-  -- from loading unrelated buffers into our diff pane.
   vim.api.nvim_set_option_value("winfixbuf", true, { win = win })
-
   setup_diff_keymaps(buf)
   refocus_panel()
 end
@@ -342,8 +364,6 @@ local function show_side_by_side(left_buf, right_buf)
   enable_diff_mode(left_win)
   enable_diff_mode(right_win)
 
-  -- Lock windows to their buffers — prevents IDE bridge / external plugins
-  -- from loading unrelated buffers into our diff panes.
   vim.api.nvim_set_option_value("winfixbuf", true, { win = left_win })
   vim.api.nvim_set_option_value("winfixbuf", true, { win = right_win })
 
