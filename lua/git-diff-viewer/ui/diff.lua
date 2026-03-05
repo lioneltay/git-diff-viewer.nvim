@@ -21,10 +21,7 @@ local config = require("git-diff-viewer.config")
 
 local M = {}
 
--- Load a real file buffer for diff display.
--- Suppresses BufReadPost for NEW buffers to prevent auto-reload.nvim from
--- watching files loaded by our plugin (avoids E94 from stale checktime timers).
--- Already-loaded buffers are a no-op — they keep their existing watchers.
+-- Load a real file buffer for diff display if not already loaded.
 local function load_for_diff(buf)
   if vim.api.nvim_buf_is_loaded(buf) then return end
   vim.fn.bufload(buf)
@@ -418,9 +415,10 @@ function M.open(item)
     return
   end
 
-  -- Branch diff mode — compare working tree against target branch
+  -- Branch diff mode — compare working tree against merge-base (common ancestor).
+  -- This matches GitHub PR diffs: shows only changes introduced by this branch.
   if item.status == "branch_diff" then
-    local target = state.target_branch
+    local ref = state.merge_base or state.target_branch
     local full_path = cwd .. "/" .. path
 
     -- Added: single pane, working tree file
@@ -432,14 +430,14 @@ function M.open(item)
       return
     end
 
-    -- Deleted: single pane, show from target branch
+    -- Deleted: single pane, show from merge-base
     if xy == " D" then
-      local cache_key = target .. ":" .. path
+      local cache_key = ref .. ":" .. path
       local ref_buf = get_or_create_scratch(cache_key, path)
       load_git_content(
-        function(cb) git.show_ref(cwd, target, path, cb) end,
+        function(cb) git.show_ref(cwd, ref, path, cb) end,
         ref_buf,
-        "(error loading " .. target .. " content)",
+        "(error loading base content)",
         function() show_single(ref_buf) end
       )
       return
@@ -447,7 +445,7 @@ function M.open(item)
 
     -- Modified or Renamed: side-by-side
     local old_path = item.orig_path or path
-    local cache_key = target .. ":" .. old_path
+    local cache_key = ref .. ":" .. old_path
     local left_buf = get_or_create_scratch(cache_key, old_path)
 
     local right_buf = vim.fn.bufnr(full_path, true)
@@ -455,9 +453,9 @@ function M.open(item)
     pin_buffer(right_buf)
 
     load_git_content(
-      function(cb) git.show_ref(cwd, target, old_path, cb) end,
+      function(cb) git.show_ref(cwd, ref, old_path, cb) end,
       left_buf,
-      "(error loading " .. target .. " content)",
+      "(error loading base content)",
       function() show_side_by_side(left_buf, right_buf) end
     )
     return

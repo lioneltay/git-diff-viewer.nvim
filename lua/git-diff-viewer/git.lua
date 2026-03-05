@@ -178,18 +178,29 @@ function M.detect_default_branch(cwd, callback)
   end)
 end
 
+-- Compute the merge-base (common ancestor) between target and HEAD.
+-- This is equivalent to the three-dot diff base that GitHub uses for PRs.
+-- callback(ok: boolean, base_sha: string)
+function M.merge_base(cwd, target, callback)
+  run({ "git", "merge-base", target, "HEAD" }, { cwd = cwd }, function(ok, stdout)
+    callback(ok, ok and vim.trim(stdout) or stdout)
+  end)
+end
+
 -- Get file list with status (M/A/D/R) for branch diff.
+-- base: merge-base commit SHA (from M.merge_base)
 -- callback(ok: boolean, raw: string)
-function M.diff_branch_name_status(cwd, target, callback)
-  run({ "git", "diff", target, "--name-status", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
+function M.diff_branch_name_status(cwd, base, callback)
+  run({ "git", "diff", base, "HEAD", "--name-status", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
     callback(ok, stdout)
   end)
 end
 
 -- Get +/- counts for branch diff.
+-- base: merge-base commit SHA (from M.merge_base)
 -- callback(ok: boolean, raw: string)
-function M.diff_branch_numstat(cwd, target, callback)
-  run({ "git", "diff", target, "--numstat", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
+function M.diff_branch_numstat(cwd, base, callback)
+  run({ "git", "diff", base, "HEAD", "--numstat", "-z", "-M" }, { cwd = cwd }, function(ok, stdout)
     callback(ok, stdout)
   end)
 end

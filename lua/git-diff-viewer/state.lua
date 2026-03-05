@@ -30,6 +30,9 @@ function M.reset()
   -- Target branch for branch mode (e.g., "main", "origin/develop")
   M.target_branch = nil
 
+  -- Merge-base SHA for branch mode (common ancestor of target and HEAD)
+  M.merge_base = nil
+
   -- Git root directory for the current session
   M.git_root = nil
 

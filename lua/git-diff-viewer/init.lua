@@ -517,68 +517,86 @@ function M.load_and_render_branch()
   local target = state.target_branch
   local gen = state.next_generation()
 
-  local name_status_raw = nil
-  local numstat_raw = nil
-  local errors = {}
-  local pending = 2
-
-  local function try_render()
-    pending = pending - 1
-    if pending > 0 then return end
-
-    refresh_in_flight = false
-
-    if state.generation ~= gen then return end
-
-    if #errors > 0 then
-      utils.error("Git error: " .. table.concat(errors, "; "))
-      return
-    end
-
-    if not state.is_active() then return end
-
-    local name_status_entries = parse.parse_name_status(name_status_raw or "")
-    local numstat = parse.parse_numstat(numstat_raw or "")
-
-    local files = parse.build_branch_file_list(name_status_entries, numstat)
-    state.sections = {
-      { key = "changes", label = "Changes", items = files.changes },
-    }
-    reconcile_current_diff()
-    reconcile_viewed_diffs()
-    panel.render()
-    -- Only touch diff windows if we're on the diff tab — background refreshes
-    -- (e.g. from FocusGained) must not steal focus to the diff tab.
-    local on_diff_tab = state.tab and vim.api.nvim_tabpage_is_valid(state.tab)
-      and vim.api.nvim_get_current_tabpage() == state.tab
-    if on_diff_tab then
-      if not state.current_diff and #(state.diff_bufs or {}) > 0 then
-        diff.show_empty()
-      else
-        diff.refresh_diff_bufs()
-      end
-    end
-  end
-
-  git.diff_branch_name_status(cwd, target, function(ok, raw)
+  -- Compute merge-base first, then run diff commands against it.
+  -- This matches GitHub PR diffs (three-dot: changes since common ancestor).
+  git.merge_base(cwd, target, function(ok, base)
     vim.schedule(function()
       if not ok then
-        table.insert(errors, "branch name-status: " .. (raw or "unknown"))
-      else
-        name_status_raw = raw
+        refresh_in_flight = false
+        utils.error("Git error: merge-base: " .. (base or "unknown"))
+        return
       end
-      try_render()
-    end)
-  end)
+      if state.generation ~= gen then
+        refresh_in_flight = false
+        return
+      end
 
-  git.diff_branch_numstat(cwd, target, function(ok, raw)
-    vim.schedule(function()
-      if not ok then
-        table.insert(errors, "branch numstat: " .. (raw or "unknown"))
-      else
-        numstat_raw = raw
+      state.merge_base = base
+
+      local name_status_raw = nil
+      local numstat_raw = nil
+      local errors = {}
+      local pending = 2
+
+      local function try_render()
+        pending = pending - 1
+        if pending > 0 then return end
+
+        refresh_in_flight = false
+
+        if state.generation ~= gen then return end
+
+        if #errors > 0 then
+          utils.error("Git error: " .. table.concat(errors, "; "))
+          return
+        end
+
+        if not state.is_active() then return end
+
+        local name_status_entries = parse.parse_name_status(name_status_raw or "")
+        local numstat = parse.parse_numstat(numstat_raw or "")
+
+        local files = parse.build_branch_file_list(name_status_entries, numstat)
+        state.sections = {
+          { key = "changes", label = "Changes", items = files.changes },
+        }
+        reconcile_current_diff()
+        reconcile_viewed_diffs()
+        panel.render()
+        -- Only touch diff windows if we're on the diff tab — background refreshes
+        -- (e.g. from FocusGained) must not steal focus to the diff tab.
+        local on_diff_tab = state.tab and vim.api.nvim_tabpage_is_valid(state.tab)
+          and vim.api.nvim_get_current_tabpage() == state.tab
+        if on_diff_tab then
+          if not state.current_diff and #(state.diff_bufs or {}) > 0 then
+            diff.show_empty()
+          else
+            diff.refresh_diff_bufs()
+          end
+        end
       end
-      try_render()
+
+      git.diff_branch_name_status(cwd, base, function(ok2, raw)
+        vim.schedule(function()
+          if not ok2 then
+            table.insert(errors, "branch name-status: " .. (raw or "unknown"))
+          else
+            name_status_raw = raw
+          end
+          try_render()
+        end)
+      end)
+
+      git.diff_branch_numstat(cwd, base, function(ok2, raw)
+        vim.schedule(function()
+          if not ok2 then
+            table.insert(errors, "branch numstat: " .. (raw or "unknown"))
+          else
+            numstat_raw = raw
+          end
+          try_render()
+        end)
+      end)
     end)
   end)
 end
