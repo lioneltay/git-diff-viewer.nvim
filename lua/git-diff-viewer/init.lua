@@ -266,6 +266,19 @@ local function setup_autocmds()
 
     local dw = state.diff_wins or {}
     if #dw < 2 then return end
+
+    -- Check if all diff windows already have correct settings — skip if so.
+    -- This turns the common case into a cheap no-op instead of running
+    -- diffupdate on every CmdlineLeave/WinEnter/floating window open.
+    local needs_restore = false
+    for _, w in ipairs(dw) do
+      if vim.api.nvim_win_is_valid(w) and not vim.wo[w].diff then
+        needs_restore = true
+        break
+      end
+    end
+    if not needs_restore then return end
+
     for _, w in ipairs(dw) do
       if vim.api.nvim_win_is_valid(w) then
         vim.api.nvim_set_option_value("diff", true, { win = w })
@@ -612,8 +625,13 @@ function M.open_branch(target_arg)
   -- Already in branch mode with same target — just focus
   if state.is_active() and state.mode == "branch" then
     if target_arg and target_arg ~= state.target_branch then
-      -- Different target: update and refresh
+      -- Different target: delete old scratch buffers, update and refresh
       state.target_branch = target_arg
+      for _, buf in pairs(state.buf_cache) do
+        if vim.api.nvim_buf_is_valid(buf) then
+          pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        end
+      end
       state.buf_cache = {}
       M.load_and_render_branch()
       return
@@ -703,13 +721,20 @@ function M.refresh()
   if not state.is_active() then return end
   -- Bug #18: Preserve cache entries for currently displayed buffers,
   -- clear the rest so git show content is re-fetched on next diff open.
+  -- Delete evicted scratch buffers to prevent hidden buffer accumulation.
   local preserved = {}
   for key, buf in pairs(state.buf_cache) do
+    local keep = false
     for _, db in ipairs(state.diff_bufs) do
       if buf == db then
-        preserved[key] = buf
+        keep = true
         break
       end
+    end
+    if keep then
+      preserved[key] = buf
+    elseif vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
     end
   end
   state.buf_cache = preserved

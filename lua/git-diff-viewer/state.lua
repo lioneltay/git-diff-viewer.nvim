@@ -24,6 +24,15 @@ function M.reset()
     pcall(vim.api.nvim_buf_delete, M.panel_buf, { force = true })
   end
 
+  -- Delete cached scratch buffers to prevent hidden buffer accumulation
+  if M.buf_cache then
+    for _, buf in pairs(M.buf_cache) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+  end
+
   -- Viewer mode: "status" (default git status diff) or "branch" (branch comparison)
   M.mode = nil
 

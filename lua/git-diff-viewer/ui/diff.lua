@@ -57,16 +57,7 @@ local function get_or_create_scratch(cache_key, path)
     return state.buf_cache[cache_key]
   end
 
-  -- Orphan detection: buffer may exist from a previous cache clear but still be valid.
-  -- Find it by name and reuse to preserve jumplist entries.
   local expected_name = "git-diff-viewer://" .. cache_key
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b) == expected_name then
-      state.buf_cache[cache_key] = b
-      return b
-    end
-  end
-
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
   -- "hide" so cached buffers survive when the window is closed (enables jumplist + cache reuse)
@@ -96,7 +87,7 @@ end
 local function message_buf(msg)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { msg })
   vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
   return buf
