@@ -54,10 +54,14 @@ local function fire_git(action_fn, git_fn)
     vim.schedule(function()
       if not ok then
         utils.error("Git operation failed: " .. (stderr or ""))
+        -- Refresh to revert optimistic update on error
+        if state.is_active() and M.refresh then
+          M.refresh()
+        end
       end
-      if state.is_active() and M.refresh then
-        M.refresh()
-      end
+      -- On success: the file watcher handles refresh when .git/index changes.
+      -- No explicit refresh needed — it would trigger redundant git commands
+      -- that get discarded by the generation counter anyway.
     end)
   end)
 end
