@@ -20,9 +20,10 @@ local operations = require("git-diff-viewer.operations")
 local augroup = vim.api.nvim_create_augroup("GitDiffViewer", { clear = true })
 
 -- Guard: prevent watcher → load_and_render → watcher infinite loop.
--- Watcher events during a refresh are dropped (not queued) to break the
+-- Watcher events during a refresh are deferred (not queued) to break the
 -- feedback cycle where git commands read .git/index and re-trigger the watcher.
 local refresh_in_flight = false
+local refresh_dirty = false  -- watcher event arrived during refresh_in_flight
 
 -- Forward declaration (assigned later, used in try_render)
 local debounced_refresh
@@ -99,6 +100,13 @@ function M.load_and_render()
     if pending > 0 then return end
 
     refresh_in_flight = false
+
+    -- Drain dirty flag: a watcher event arrived during this refresh.
+    -- Schedule another refresh to pick up changes we may have missed.
+    if refresh_dirty then
+      refresh_dirty = false
+      debounced_refresh()
+    end
 
     -- Stale callback — a newer load_and_render was started
     if state.generation ~= gen then return end
@@ -412,7 +420,10 @@ end
 local function watcher_refresh()
   vim.schedule(function()
     if not state.is_active() then return end
-    if refresh_in_flight then return end
+    if refresh_in_flight then
+      refresh_dirty = true
+      return
+    end
     debounced_refresh()
   end)
 end
@@ -536,11 +547,13 @@ function M.load_and_render_branch()
     vim.schedule(function()
       if not ok then
         refresh_in_flight = false
+        if refresh_dirty then refresh_dirty = false; debounced_refresh() end
         utils.error("Git error: merge-base: " .. (base or "unknown"))
         return
       end
       if state.generation ~= gen then
         refresh_in_flight = false
+        if refresh_dirty then refresh_dirty = false; debounced_refresh() end
         return
       end
 
@@ -556,6 +569,11 @@ function M.load_and_render_branch()
         if pending > 0 then return end
 
         refresh_in_flight = false
+
+        if refresh_dirty then
+          refresh_dirty = false
+          debounced_refresh()
+        end
 
         if state.generation ~= gen then return end
 

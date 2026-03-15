@@ -167,8 +167,13 @@ function M._show_picker(branches)
 
     close()
 
-    -- Update state and refresh
+    -- Update state and refresh — delete old scratch buffers before clearing cache
     state.target_branch = branch
+    for _, buf in pairs(state.buf_cache) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
     state.buf_cache = {}
     require("git-diff-viewer").load_and_render_branch()
   end
