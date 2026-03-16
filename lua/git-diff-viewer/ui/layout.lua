@@ -60,6 +60,7 @@ function M.create_tab()
   vim.bo[initial_buf].buflisted = false
   vim.bo[initial_buf].buftype = "nofile"
   vim.bo[initial_buf].bufhidden = "hide"
+  vim.bo[initial_buf].undolevels = -1
 
   -- Create the panel as a left vertical split
   vim.cmd("noautocmd topleft vsplit")

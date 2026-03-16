@@ -62,6 +62,7 @@ local function get_or_create_scratch(cache_key, path)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
   -- "hide" so cached buffers survive when the window is closed (enables jumplist + cache reuse)
   vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  vim.bo[buf].undolevels = -1
   -- Name gives the buffer a meaningful identity (and preserves extension for icons)
   vim.api.nvim_buf_set_name(buf, expected_name)
   -- Set filetype from path — vim.filetype.match handles extensions and special filenames
@@ -88,6 +89,7 @@ local function message_buf(msg)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+  vim.bo[buf].undolevels = -1
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { msg })
   vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
   return buf

@@ -327,6 +327,9 @@ end
 -- Expose for use by finder.lua
 M.build_lines = build_lines
 
+-- Previous render key for change detection — skip redundant buffer writes.
+local prev_render_key = nil
+
 -- Render the panel buffer from current state.
 -- Preserves cursor line number (cursor stays at same line after re-render).
 function M.render()
@@ -351,6 +354,19 @@ function M.render()
   -- Build new content
   local lines, text, highlights = build_lines(state.sections)
   state.panel_lines = lines
+
+  -- Skip buffer write if content and active highlight are unchanged — avoids
+  -- undo entries, extmark churn, cursor resets, and autocmd triggers
+  -- (TextChanged etc.) that other plugins may react to.
+  local active_key = ""
+  if state.current_diff and state.current_diff.item then
+    active_key = state.current_diff.item.path .. ":" .. state.current_diff.item.section
+  end
+  local render_key = table.concat(text, "\n") .. "\0" .. active_key
+  if render_key == prev_render_key then
+    return
+  end
+  prev_render_key = render_key
 
   -- Write to buffer (temporarily make modifiable)
   vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
@@ -405,11 +421,13 @@ end
 -- Create and configure the panel scratch buffer with all keymaps.
 -- Returns the buffer handle.
 function M.create_buf()
+  prev_render_key = nil
   local buf = vim.api.nvim_create_buf(false, true)
 
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
   vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+  vim.bo[buf].undolevels = -1
   vim.api.nvim_set_option_value("filetype", "git-diff-viewer-panel", { buf = buf })
   vim.api.nvim_buf_set_name(buf, "GitDiffViewer")
 
