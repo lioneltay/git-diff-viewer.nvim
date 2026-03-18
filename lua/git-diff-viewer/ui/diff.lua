@@ -65,10 +65,18 @@ local function get_or_create_scratch(cache_key, path)
   vim.bo[buf].undolevels = -1
   -- Name gives the buffer a meaningful identity (and preserves extension for icons)
   vim.api.nvim_buf_set_name(buf, expected_name)
-  -- Set filetype from path — vim.filetype.match handles extensions and special filenames
+  -- Set filetype for syntax highlighting, but suppress autocmds to prevent
+  -- external plugins (LSP, treesitter, gitsigns) from attaching to read-only
+  -- scratch buffers where they serve no purpose and accumulate over time.
   local ft = vim.filetype.match({ filename = path })
   if ft then
+    local ei = vim.o.eventignore
+    vim.o.eventignore = "all"
     vim.api.nvim_set_option_value("filetype", ft, { buf = buf })
+    vim.o.eventignore = ei
+    -- Manually start treesitter highlighting (the suppressed FileType event
+    -- would normally trigger this via nvim-treesitter).
+    pcall(vim.treesitter.start, buf)
   end
 
   state.buf_cache[cache_key] = buf
@@ -137,6 +145,10 @@ end
 -- work. This prevents plugin keymaps leaking into normal editing when a real
 -- file buffer is shared across tabs.
 local function setup_diff_keymaps(buf)
+  -- Skip if this buffer already has our keymaps — prevents re-creating 14
+  -- closures and 14 vim.keymap.set calls on every file switch for cached buffers.
+  if state.keymap_bufs[buf] then return end
+
   local dk = config.options.diff_keymaps
 
   local function map(key, fn, desc)
