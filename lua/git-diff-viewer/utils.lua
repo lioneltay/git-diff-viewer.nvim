@@ -78,6 +78,9 @@ function M.setup_highlights()
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
   end
+  -- Strikethrough variants for deletion-related conflicts (DD, DU, UD)
+  vim.api.nvim_set_hl(0, "GitDiffViewerFileNameStrike", { strikethrough = true, default = true })
+  vim.api.nvim_set_hl(0, "GitDiffViewerFileNameActiveStrike", { link = "Type", strikethrough = true, default = true })
 end
 
 -- Return the highlight group for a given status icon character.

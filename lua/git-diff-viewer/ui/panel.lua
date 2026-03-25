@@ -195,13 +195,23 @@ local function build_lines(sections, opts)
       end
     end
 
-    -- Binary / submodule annotation
+    -- Descriptive annotation for binary, submodule, and conflict type
     local dim_col
     local dim_text
     if item.binary then
       dim_text = "[binary]"
     elseif item.submodule then
       dim_text = "[submodule]"
+    elseif item.section == "conflicts" and item.xy then
+      local conflict_labels = {
+        DD = "[both deleted]",
+        DU = "[deleted by us]",
+        UD = "[deleted by them]",
+        AA = "[both added]",
+        AU = "[added by us]",
+        UA = "[added by them]",
+      }
+      dim_text = conflict_labels[item.xy]
     end
     if dim_text then
       table.insert(line_parts, "  ")
@@ -223,7 +233,15 @@ local function build_lines(sections, opts)
     end
 
     local is_active = (item.path == active_path and item.section == active_section)
-    local name_hl = is_active and "GitDiffViewerFileNameActive" or "GitDiffViewerFileName"
+    -- Strikethrough for deletion-related conflicts (matches VSCode behavior)
+    local is_delete_conflict = item.section == "conflicts"
+      and (item.xy == "DD" or item.xy == "DU" or item.xy == "UD")
+    local name_hl
+    if is_delete_conflict then
+      name_hl = is_active and "GitDiffViewerFileNameActiveStrike" or "GitDiffViewerFileNameStrike"
+    else
+      name_hl = is_active and "GitDiffViewerFileNameActive" or "GitDiffViewerFileName"
+    end
     hl(name_hl, line_idx, name_col, name_col + #name)
 
     if added_col and added_str then

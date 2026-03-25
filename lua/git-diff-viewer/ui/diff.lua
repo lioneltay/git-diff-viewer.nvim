@@ -725,8 +725,11 @@ function M.refresh_diff_bufs()
           load_git_content(git_fn, buf, "(error refreshing)", on_done)
         end
       end
+    else
+      -- Real file buffer — reload from disk so the diff reflects external changes
+      -- (autoread only triggers on BufEnter/FocusGained, not watcher refreshes).
+      pcall(vim.cmd, "checktime " .. buf)
     end
-    -- Real file buffers are updated by Neovim's autoread or the IDE bridge.
 
     ::continue::
   end
