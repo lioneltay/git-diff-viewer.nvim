@@ -37,6 +37,27 @@ end
 
 -- ─── Internal: load git data and render ───────────────────────────────────────
 
+-- Evict scratch buffers from buf_cache that aren't currently displayed.
+-- Prevents hidden buffers (with treesitter parsers) from accumulating over a session.
+local function evict_stale_cache()
+  local preserved = {}
+  for key, buf in pairs(state.buf_cache) do
+    local keep = false
+    for _, db in ipairs(state.diff_bufs or {}) do
+      if buf == db then
+        keep = true
+        break
+      end
+    end
+    if keep then
+      preserved[key] = buf
+    elseif vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+  end
+  state.buf_cache = preserved
+end
+
 -- Bug #3: After sections are rebuilt, update current_diff to reference
 -- the new item object (by path+section match, then path-only fallback).
 local function reconcile_current_diff()
@@ -131,6 +152,7 @@ function M.load_and_render()
       { key = "changes",   label = "Changes",         items = files.changes },
       { key = "staged",    label = "Staged Changes",  items = files.staged },
     }
+    evict_stale_cache()
     reconcile_current_diff()
     reconcile_viewed_diffs()
     panel.render()
@@ -203,6 +225,9 @@ debounced_refresh = function()
   if not state.is_active() then return end
   if refresh_timer then
     refresh_timer:stop()
+    if not refresh_timer:is_closing() then
+      refresh_timer:close()
+    end
   end
   refresh_timer = vim.defer_fn(function()
     refresh_timer = nil
@@ -387,6 +412,9 @@ teardown_autocmds = function()
   vim.api.nvim_clear_autocmds({ group = augroup })
   if refresh_timer then
     refresh_timer:stop()
+    if not refresh_timer:is_closing() then
+      refresh_timer:close()
+    end
     refresh_timer = nil
   end
   -- Restore original nvim_open_win / nvim_win_close if we intercepted them
@@ -591,6 +619,7 @@ function M.load_and_render_branch()
         state.sections = {
           { key = "changes", label = "Changes", items = files.changes },
         }
+        evict_stale_cache()
         reconcile_current_diff()
         reconcile_viewed_diffs()
         panel.render()
@@ -737,25 +766,7 @@ end
 
 function M.refresh()
   if not state.is_active() then return end
-  -- Bug #18: Preserve cache entries for currently displayed buffers,
-  -- clear the rest so git show content is re-fetched on next diff open.
-  -- Delete evicted scratch buffers to prevent hidden buffer accumulation.
-  local preserved = {}
-  for key, buf in pairs(state.buf_cache) do
-    local keep = false
-    for _, db in ipairs(state.diff_bufs) do
-      if buf == db then
-        keep = true
-        break
-      end
-    end
-    if keep then
-      preserved[key] = buf
-    elseif vim.api.nvim_buf_is_valid(buf) then
-      pcall(vim.api.nvim_buf_delete, buf, { force = true })
-    end
-  end
-  state.buf_cache = preserved
+  evict_stale_cache()
   if state.mode == "branch" then
     M.load_and_render_branch()
   else

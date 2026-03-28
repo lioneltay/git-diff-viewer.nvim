@@ -327,6 +327,10 @@ local function build_lines(sections, opts)
     -- Skip folder/file rendering if section is collapsed
     if is_collapsed then goto continue end
 
+    -- Sort by path for deterministic tree order regardless of item insertion order
+    -- (optimistic updates append items, which can scramble the natural order)
+    table.sort(filtered, function(a, b) return a.path < b.path end)
+
     -- Build tree → compact → render
     local tree = build_tree(filtered)
     compact_tree(tree)

@@ -147,32 +147,47 @@ end
 
 -- ─── Branch diff commands ────────────────────────────────────────────────────
 
--- Detect the default branch (main or master).
--- Tries: symbolic-ref of origin/HEAD → rev-parse main → rev-parse master
+-- Detect the default branch for branch diff mode.
+-- Prefers origin/<branch> so diffs compare against the remote (matching PR behavior).
+-- Falls back to local branch name if no origin remote exists.
+-- Tries: symbolic-ref of origin/HEAD → origin/main → origin/master → main → master
 -- callback(ok: boolean, branch: string)
 function M.detect_default_branch(cwd, callback)
   run({ "git", "symbolic-ref", "refs/remotes/origin/HEAD" }, { cwd = cwd }, function(ok, stdout)
     if ok then
-      -- "refs/remotes/origin/main" → "main"
-      local branch = vim.trim(stdout):match("[^/]+$")
+      -- "refs/remotes/origin/main" → "origin/main"
+      local branch = vim.trim(stdout):match("refs/remotes/(.+)$")
       if branch then
         callback(true, branch)
         return
       end
     end
-    -- Fallback: try "main"
-    run({ "git", "rev-parse", "--verify", "main" }, { cwd = cwd }, function(ok2)
+    -- Fallback: try origin/main
+    run({ "git", "rev-parse", "--verify", "origin/main" }, { cwd = cwd }, function(ok2)
       if ok2 then
-        callback(true, "main")
+        callback(true, "origin/main")
         return
       end
-      -- Fallback: try "master"
-      run({ "git", "rev-parse", "--verify", "master" }, { cwd = cwd }, function(ok3)
+      -- Fallback: try origin/master
+      run({ "git", "rev-parse", "--verify", "origin/master" }, { cwd = cwd }, function(ok3)
         if ok3 then
-          callback(true, "master")
-        else
-          callback(false, "main")
+          callback(true, "origin/master")
+          return
         end
+        -- No origin remote — fall back to local branches
+        run({ "git", "rev-parse", "--verify", "main" }, { cwd = cwd }, function(ok4)
+          if ok4 then
+            callback(true, "main")
+            return
+          end
+          run({ "git", "rev-parse", "--verify", "master" }, { cwd = cwd }, function(ok5)
+            if ok5 then
+              callback(true, "master")
+            else
+              callback(false, "main")
+            end
+          end)
+        end)
       end)
     end)
   end)
